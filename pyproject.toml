@@ -1,0 +1,82 @@
+[project]
+name = "decompai-ida"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.10.10",
+    "aiohttp-retry>=2.9.1",
+    "pydantic>=2.9.2",
+    "python-dateutil>=2.9.0.post0",
+    "typing-extensions>=4.12.2",
+    "urllib3>=2.2.3",
+    "anyio>=4.6.2.post1",
+    "more-itertools>=10.5.0",
+    "ida-netnode>=3.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.3",
+    "syrupy>=4.7.2",
+    "devtools>=0.12.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.3",
+    "poethepoet>=0.29.0",
+    "pyright>=1.1.388",
+    "ruff>=0.7.3",
+    "ida-types",
+    "syrupy>=4.7.2",
+    "devtools>=0.12.2",
+    "pyqt5-stubs>=5.15.6.0",
+]
+
+[tool.uv.sources]
+ida-types = { git = "ssh://git@github.com/natasky/ida-types.git" }
+
+[tool.poe.tasks]
+# CI
+check_style = "ruff format --check"
+lint = "ruff check"
+check_types = "pyright"
+test = "./ida.sh pytest -q"
+ci = [
+    "check_style",
+    "lint",
+    "check_types",
+    "test",
+]
+
+# IDA
+ida = "./ida.sh ./build_and_open_ida.sh"
+setup_ida.shell = "./ida.sh ./setup_ida.sh"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:builtin type swig:DeprecationWarning',
+]
+testpaths = ["tests"]
+
+[tool.pyright]
+exclude = ["src/decompai_client", "**/.*", "**/node_modules", "**/__pycache__"]
+
+# IDA imports are stub only.
+reportMissingModuleSource = false
+
+[tool.typos.defeult]
+extend-ignore-words-re = ["tye"]
+
+[tool.ruff]
+exclude = ["src/decompai_client"]
+line-length = 80
+target-version = "py310"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+

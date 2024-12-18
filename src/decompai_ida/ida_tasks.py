@@ -105,17 +105,21 @@ def _make_generator_decorator(flags: int):
     return decorator
 
 
+# Currently we never request MFF_READ, as it proves hard to tell which API only
+# reads the DB (e.g. `ida_hexrays.decompile` writes), and getting this wrong may
+# lead to crashes.
+
 ui = _make_decorator(ida_kernwin.MFF_FAST)
-read = _make_decorator(ida_kernwin.MFF_READ)
+read = _make_decorator(ida_kernwin.MFF_WRITE)
 write = _make_decorator(ida_kernwin.MFF_WRITE)
 ui_generator = _make_generator_decorator(ida_kernwin.MFF_FAST)
-read_generator = _make_generator_decorator(ida_kernwin.MFF_READ)
+read_generator = _make_generator_decorator(ida_kernwin.MFF_WRITE)
 write_generator = _make_generator_decorator(ida_kernwin.MFF_WRITE)
 run_ui = _make_runner(ida_kernwin.MFF_FAST)
-run_read = _make_runner(ida_kernwin.MFF_READ)
+run_read = _make_runner(ida_kernwin.MFF_WRITE)
 run_write = _make_runner(ida_kernwin.MFF_WRITE)
 ui_iter = _make_iter(ida_kernwin.MFF_FAST)
-read_iter = _make_iter(ida_kernwin.MFF_READ)
+read_iter = _make_iter(ida_kernwin.MFF_WRITE)
 write_iter = _make_iter(ida_kernwin.MFF_WRITE)
 
 

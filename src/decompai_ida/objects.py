@@ -1,15 +1,23 @@
-from dataclasses import dataclass
 import typing as ty
+from dataclasses import dataclass
+
 import ida_funcs
 import ida_hexrays
 import ida_name
-from idaapi import BADADDR
 import idautils
+from idaapi import BADADDR
+from more_itertools import ilen, take
 
 from decompai_client import Name
 from decompai_client.models import Function, Object, Thunk
 from decompai_ida import api, ida_tasks
 from decompai_ida.env import Env
+
+_MAX_INSTRUCTIONS_TO_DECOMPILE = 0x2000
+"""
+Skip decompiling functions larger than this. These may cause decompiler to hang for a
+long time, and will probably be too large for model.
+"""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -18,7 +26,9 @@ class ReadFailure:
     error: Exception
 
 
-@ida_tasks.read_generator
+# Note - decompiling a function actually requires writing to the DB, probably to
+# cache results. Using `read` here results in failed decompilations.
+@ida_tasks.write_generator
 def read_objects(
     addresses: ty.Iterable[int],
 ) -> ty.Iterator[Object | ReadFailure]:
@@ -49,7 +59,7 @@ def _read_object_sync(address: int) -> Object:
     if is_thunk:
         target, _ = ida_funcs.calc_thunk_func_target(func)
         if target == BADADDR:
-            raise Exception(f"Can't find thunk target for {address:08x}")
+            raise Exception("Can't find thunk target")
 
         return Object(
             Thunk(
@@ -59,15 +69,16 @@ def _read_object_sync(address: int) -> Object:
             )
         )
     else:
+        if _is_too_big_to_decompile(address):
+            raise Exception("Not decompiling, too big")
+
         failure = ida_hexrays.hexrays_failure_t()
-        decompiled = ida_hexrays.decompile_func(
-            func,
-            failure,
-            ida_hexrays.DECOMP_NO_WAIT,
-        )
+        # Note - using DECOMP_NO_WAIT here may leave IDA stuck with no way to
+        # recover if decompiler hangs.
+        decompiled = ida_hexrays.decompile_func(func, failure)
 
         if decompiled is None:
-            raise Exception(f"Can't decompile {address:08x}: {failure.desc()}")
+            raise Exception(f"Can't decompile: {failure.desc()}")
 
         code = str(decompiled)
         inferences = state.get_inferences_for_address_sync(address)
@@ -99,3 +110,10 @@ def _get_calls_sync(address: int) -> list[str]:
                 continue
             results.add(func.start_ea)
     return [api.format_address(result) for result in results]
+
+
+def _is_too_big_to_decompile(address: int) -> int:
+    return (
+        ilen(take(_MAX_INSTRUCTIONS_TO_DECOMPILE, idautils.FuncItems(address)))
+        == _MAX_INSTRUCTIONS_TO_DECOMPILE
+    )

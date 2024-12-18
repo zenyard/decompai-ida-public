@@ -49,18 +49,20 @@ async def _poll_server(sender: ObjectSendStream[_Message]):
 
                 match response.actual_instance:
                     case BinaryAnalysisIdle():
-                        progress = 1.0
+                        # Server completed at least the revision stored in DB
+                        # before calling API.
+                        progress = revision
                     case BinaryAnalysisInProgress() as in_progress:
-                        progress = in_progress.progress
+                        progress = (
+                            in_progress.revision - 1 + in_progress.progress
+                        )
                     case _:
                         raise Exception(
                             f"Unknown status: {response.actual_instance}"
                         )
 
                 await sender.send(
-                    _ServerStateChanged(
-                        revision_progress=revision - 1.0 + progress
-                    )
+                    _ServerStateChanged(revision_progress=progress)
                 )
 
                 await task.mark_done()

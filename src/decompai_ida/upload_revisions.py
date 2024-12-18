@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 import anyio
 from anyio.abc import ObjectReceiveStream, ObjectSendStream
-import exceptiongroup
 
 from decompai_client import Object, PutRevisionBody
 from decompai_ida import api, objects, status
@@ -70,7 +69,9 @@ async def _read_objects(
                     case objects.ReadFailure():
                         # Don't try processing this again
                         await env.state.mark_addresses_clean((result.address,))
-                        exceptiongroup.print_exception(result.error)
+                        print(
+                            f"Error reading {result.address:08x}: {result.error}"
+                        )
 
                 await task.mark_item_complete()
 

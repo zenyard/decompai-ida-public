@@ -19,8 +19,7 @@ import ida_loader
 
 API_URL = "https://api.zenyard.ai"
 INSTALL_LOCATION = "git+https://github.com/zenyard/decompai-ida-public.git"
-# STUB_FILE_URL = "https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/decompai_stub.py"
-STUB_FILE_URL = "http://localhost:8000/decompai_stub.py"
+STUB_FILE_URL = "https://raw.githubusercontent.com/zenyard/decompai-ida-public/main/decompai_stub.py"
 
 user_dir = Path(ida_diskio.get_user_idadir())
 stub_path = user_dir / "plugins" / "decompai_stub.py"

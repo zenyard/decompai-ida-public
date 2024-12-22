@@ -23,6 +23,7 @@ STUB_FILE_URL = "https://raw.githubusercontent.com/zenyard/decompai-ida-public/m
 
 user_dir = Path(ida_diskio.get_user_idadir())
 stub_path = user_dir / "plugins" / "decompai_stub.py"
+packages_path = user_dir / "plugins" / "decompai_packages"
 config_path = user_dir / "decompai.json"
 
 
@@ -39,7 +40,7 @@ def main():
             api_key = None
 
         print("[+] Installing or upgrading package (may take a minute)")
-        install_or_upgrade_package(INSTALL_LOCATION)
+        install_or_upgrade_package(INSTALL_LOCATION, target=packages_path)
 
         print("[+] Installing plugin stub file")
         install_stub_file()
@@ -93,6 +94,41 @@ def request_api_key():
     return api_key
 
 
+def get_hidden_window_startupinfo():
+    if sys.platform == "win32":
+        si_hidden_window = subprocess.STARTUPINFO()
+        si_hidden_window.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        si_hidden_window.wShowWindow = subprocess.SW_HIDE
+        return si_hidden_window
+    else:
+        return None
+
+
+def install_or_upgrade_package(source: str, *, target: Path):
+    # Try again as user
+    try:
+        run_pip(("install", "--upgrade", "--target", str(target), source))
+    except subprocess.CalledProcessError as ex:
+        all_output = indent(
+            "\n".join((ex.stdout, ex.stderr)).strip(),
+            prefix="[pip] ",
+            predicate=lambda line: True,
+        )
+        print(all_output)
+        raise
+
+
+def run_pip(args: ty.Iterable[str]):
+    subprocess.run(
+        [python_executable(), "-m", "pip", *args],
+        startupinfo=get_hidden_window_startupinfo(),
+        capture_output=True,
+        check=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+
 def python_executable() -> Path:
     base_path = Path(sys.prefix)
     if sys.platform == "win32":
@@ -105,45 +141,6 @@ def python_executable() -> Path:
     else:
         executable = base_path / "bin" / f"python{sys.version_info.major}"
     return executable
-
-
-def get_hidden_window_startupinfo():
-    if sys.platform == "win32":
-        si_hidden_window = subprocess.STARTUPINFO()
-        si_hidden_window.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        si_hidden_window.wShowWindow = subprocess.SW_HIDE
-        return si_hidden_window
-    else:
-        return None
-
-
-def install_or_upgrade_package(source: str):
-    try:
-        # Try globally
-        run_pip(("install", "--upgrade", source))
-    except subprocess.CalledProcessError:
-        # Try again as user
-        try:
-            run_pip(("install", "--user", "--upgrade", source))
-        except subprocess.CalledProcessError as ex:
-            all_output = indent(
-                "\n".join((ex.stdout, ex.stderr)).strip(),
-                prefix="[pip] ",
-                predicate=lambda line: True,
-            )
-            print(all_output)
-            raise
-
-
-def run_pip(args: ty.Iterable[str]):
-    subprocess.run(
-        [sys.executable, "-m", "pip", *args],
-        startupinfo=get_hidden_window_startupinfo(),
-        capture_output=True,
-        check=True,
-        text=True,
-        encoding="utf-8",
-    )
 
 
 def install_stub_file():

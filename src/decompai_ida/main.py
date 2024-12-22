@@ -19,18 +19,20 @@ from decompai_ida.upload_revisions import upload_revisions_task
 
 async def main(event_collector: ida_events.EventCollector):
     try:
-        # Start pumping events to broadcast.
-        events = Broadcast[ida_events.Event](ida_events.EventRecorder())
-        await event_collector.set_async_handler(events.post)
+        # Use task group to ensure all exceptions are grouped.
+        async with anyio.create_task_group():
+            # Start pumping events to broadcast.
+            events = Broadcast[ida_events.Event](ida_events.EventRecorder())
+            await event_collector.set_async_handler(events.post)
 
-        # Create API client early to detect configuration issues.
-        async with await api.get_api_client() as api_client:
-            await _watch_for_database(
-                _GlobalEnv(
-                    events=events,
-                    api_client=api_client,
+            # Create API client early to detect configuration issues.
+            async with await api.get_api_client() as api_client:
+                await _watch_for_database(
+                    _GlobalEnv(
+                        events=events,
+                        api_client=api_client,
+                    )
                 )
-            )
 
     except exceptiongroup.ExceptionGroup as ex:
         config_path = await api.get_config_path()
@@ -49,9 +51,6 @@ async def main(event_collector: ida_events.EventCollector):
             )
         else:
             exceptiongroup.print_exception(ex)
-
-    except Exception as ex:
-        exceptiongroup.print_exception(ex)
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,3 @@
-import colorsys
 import typing as ty
 
 import exceptiongroup
@@ -7,23 +6,26 @@ import ida_name
 import idc
 
 from decompai_client import FunctionOverview, Inference, Name
-from decompai_ida import api, ida_tasks
+from decompai_ida import api, ida_tasks, markdown
 from decompai_ida.env import Env
 
 _POLL_INTERVAL_SECONDS = 2
 
-# HSV values to use for colors. "Best" / "worst" according to confidence.
-_BEST_COLOR_H = 110
-_WORST_COLOR_H = 40
-_COLOR_S = 36
-_COLOR_V = 255
+
+def _rgb_to_int(r: int, g: int, b: int) -> int:
+    return (b << 16) + (g << 8) + r
+
+
+_POLL_INTERVAL_SECONDS = 2
+_INFERRED_COLOR = _rgb_to_int(220, 202, 255)
 
 
 @ida_tasks.write
 def apply_inferences(inferences: ty.Iterable[Inference]):
+    env = Env.get()
     for inference in inferences:
         try:
-            env = Env.get()
+            inference = _apply_local_transformations(inference)
             if inference.actual_instance is None:
                 return
             env.state.add_inference_for_address_sync(
@@ -38,15 +40,35 @@ def apply_inferences(inferences: ty.Iterable[Inference]):
             exceptiongroup.print_exception(ex)
 
 
+@ida_tasks.write
+def clear_inferred_name_marks(address: int):
+    current_color = idc.get_color(address, idc.CIC_FUNC)
+    if current_color == _INFERRED_COLOR:
+        idc.set_color(address, idc.CIC_FUNC, idc.DEFCOLOR)
+
+
+def _apply_local_transformations(inference: Inference) -> Inference:
+    match inference.actual_instance:
+        case FunctionOverview() as overview:
+            return Inference(
+                overview.model_copy(
+                    update={
+                        "full_description": markdown.format(
+                            overview.full_description
+                        )
+                    }
+                )
+            )
+        case _:
+            return inference
+
+
 def _apply_overview_sync(overview: FunctionOverview):
     address = api.parse_address(overview.address)
     func = ida_funcs.get_func(address)
     assert func is not None
 
-    confidence = overview.confidence
-
     ida_funcs.set_func_cmt(func, overview.full_description, False)
-    idc.set_color(address, idc.CIC_FUNC, _color_for_confidence(confidence))
 
 
 def _apply_name_sync(name: Name):
@@ -60,25 +82,4 @@ def _apply_name_sync(name: Name):
         return
 
     ida_name.set_name(address, name.name, ida_name.SN_FORCE)
-
-
-def _color_for_confidence(confidence: int) -> int:
-    if confidence < 1:
-        confidence = 1
-    elif confidence > 5:
-        confidence = 5
-
-    h_step = (_BEST_COLOR_H - _WORST_COLOR_H) / 4
-
-    return _rgb_to_int(
-        colorsys.hsv_to_rgb(
-            (_WORST_COLOR_H + (confidence - 1) * h_step) / 359,
-            _COLOR_S / 255,
-            _COLOR_V / 255,
-        )
-    )
-
-
-def _rgb_to_int(rgb: tuple[float, float, float]) -> int:
-    r, g, b = rgb
-    return (int(b * 255) << 16) + (int(g * 255) << 8) + int(r * 255)
+    idc.set_color(address, idc.CIC_FUNC, _INFERRED_COLOR)

@@ -2,7 +2,7 @@ import anyio
 import ida_funcs
 from anyio.abc import ObjectReceiveStream
 
-from decompai_ida import ida_events, ida_tasks
+from decompai_ida import ida_events, ida_tasks, inferences
 from decompai_ida.env import Env
 from decompai_ida.upload_revisions import Revision, UploadRevisions
 
@@ -18,6 +18,7 @@ async def track_changes_task():
                 break
 
             await env.state.mark_address_dirty(changed_address)
+            await inferences.clear_inferred_name_marks(changed_address)
             await env.revisions.post(
                 UploadRevisions(
                     (Revision((changed_address,)),),

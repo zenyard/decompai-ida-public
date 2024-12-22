@@ -1,7 +1,7 @@
 # Pre-requisites
 
 - IDA 9 Pro.
-- Python 3.10 or newer with `pip`. Use `idapyswitch` (in your IDA installation
+- Python 3.10 or newer with Pip. Use `idapyswitch` (in your IDA installation
   folder) to configure which Python environment is used by IDA.
 - Git (for installation).
 
@@ -20,10 +20,16 @@ This will run a script performing the steps in next section.
 - Install package in same Python environment used by IDA:
 
   ```sh
-  pip install git+https://github.com/zenyard/decompai-ida-public.git
+  pip3 install --upgrade \
+    $IDAUSR/plugins/decompai_packages \
+    git+https://github.com/zenyard/decompai-ida-public.git
   ```
 
   Use `idapyswitch` to verify or change the Python environment used by IDA.
+
+  **Note** - the above will install all packages to a folder. You may choose to
+  install package globally, to the user (with `--user`) or to a virtualenv if
+  your setup is properly configured for these options.
 
 - Add `decompai_stub.py` to [`$IDAUSR/plugins/`][1] folder (you may need to
   create this folder).

@@ -73,9 +73,9 @@ def _read_object_sync(address: int) -> Object:
             raise Exception("Not decompiling, too big")
 
         failure = ida_hexrays.hexrays_failure_t()
-        # Note - using DECOMP_NO_WAIT here may leave IDA stuck with no way to
-        # recover if decompiler hangs.
-        decompiled = ida_hexrays.decompile_func(func, failure)
+        decompiled = ida_hexrays.decompile_func(
+            func, failure, ida_hexrays.DECOMP_NO_WAIT
+        )
 
         if decompiled is None:
             raise Exception(f"Can't decompile: {failure.desc()}")

@@ -3,6 +3,7 @@ import typing as ty
 from contextlib import asynccontextmanager
 
 import anyio
+import typing_extensions as tye
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
@@ -50,7 +51,7 @@ class _StatusBarWidget(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setFixedWidth(280)
+        self.setFixedWidth(320)
 
         # HBoxLayout
         self._hbox = QHBoxLayout()
@@ -90,8 +91,8 @@ class _StatusBarWidget(QWidget):
         self,
         *,
         text: str,
-        progress: ty.Literal["busy"] | int | None = None,
-        warning: str | None = None,
+        progress: ty.Union[ty.Literal["started"], ty.Optional[int]] = None,
+        warning: ty.Optional[str] = None,
     ):
         self._label.setText(text)
 
@@ -101,17 +102,18 @@ class _StatusBarWidget(QWidget):
         else:
             self._warning_icon.setVisible(False)
 
-        match progress:
-            case "busy":
-                self._progress_bar.setVisible(True)
-                self._progress_bar.setRange(0, 0)
-                self._progress_bar.setValue(0)
-            case int(percentage):
-                self._progress_bar.setVisible(True)
-                self._progress_bar.setRange(0, 100)
-                self._progress_bar.setValue(percentage)
-            case None:
-                self._progress_bar.setVisible(False)
+        if progress == "started":
+            self._progress_bar.setVisible(True)
+            self._progress_bar.setRange(0, 0)
+            self._progress_bar.setValue(0)
+        elif isinstance(progress, int):
+            self._progress_bar.setVisible(True)
+            self._progress_bar.setRange(0, 100)
+            self._progress_bar.setValue(progress)
+        elif progress is None:
+            self._progress_bar.setVisible(False)
+        else:
+            _: tye.Never = progress
 
 
 def _load_icon(file_name: str) -> QPixmap:

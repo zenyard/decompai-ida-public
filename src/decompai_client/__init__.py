@@ -42,6 +42,7 @@ from decompai_client.models.http_validation_error import HTTPValidationError
 from decompai_client.models.inference import Inference
 from decompai_client.models.name import Name
 from decompai_client.models.object import Object
+from decompai_client.models.post_binary_body import PostBinaryBody
 from decompai_client.models.post_binary_response import PostBinaryResponse
 from decompai_client.models.put_revision_body import PutRevisionBody
 from decompai_client.models.thunk import Thunk

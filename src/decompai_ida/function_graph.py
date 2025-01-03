@@ -1,15 +1,16 @@
 import graphlib
 import typing as ty
 
-from anyio import to_thread, from_thread
 import ida_funcs
 import ida_segment
 import idautils
+import typing_extensions as tye
+from anyio import from_thread, to_thread
 from more_itertools import side_effect
 
 from decompai_ida import ida_tasks
 
-_AddressGraph: ty.TypeAlias = ty.Mapping[int, ty.Collection[int]]
+_AddressGraph: tye.TypeAlias = ty.Mapping[int, ty.Collection[int]]
 
 _IGNORED_SEGMENTS = {
     "extern",
@@ -64,7 +65,7 @@ class FunctionGraph:
 
 
 @ida_tasks.read_generator
-def _read_funcs_to_callers() -> ty.Iterator[tuple[int, int | None]]:
+def _read_funcs_to_callers() -> ty.Iterator[tuple[int, ty.Optional[int]]]:
     for segment_base in idautils.Segments():
         segment = ida_segment.getseg(segment_base)
 

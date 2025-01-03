@@ -7,29 +7,31 @@ Events generated from our own code are never collected.
 import threading
 import typing as ty
 from dataclasses import dataclass
+
 import ida_idp
 import ida_kernwin
+import typing_extensions as tye
 
 from decompai_ida import ida_tasks
-from decompai_ida.broadcast import RecordLatestOfEachType, Recorder
+from decompai_ida.broadcast import Recorder, RecordLatestOfEachType
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class DatabaseOpened:
     pass
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class DatabaseClosed:
     pass
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class MainUiReady:
     pass
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class AddressRenamed:
     address: int
     old_name: str
@@ -37,12 +39,12 @@ class AddressRenamed:
     is_local: bool
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class InitialAutoAnalysisComplete:
     pass
 
 
-Event: ty.TypeAlias = ty.Union[
+Event: tye.TypeAlias = ty.Union[
     DatabaseOpened,
     DatabaseClosed,
     MainUiReady,
@@ -59,7 +61,9 @@ class EventCollector:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._target: list[Event] | ida_tasks.AsyncCallback[[Event]] = []
+        self._target: ty.Union[
+            list[Event], ida_tasks.AsyncCallback[[Event]]
+        ] = []
 
     def add(self, event: Event):
         with self._lock:

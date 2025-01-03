@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import anyio
+import typing_extensions as tye
 from anyio.abc import ObjectReceiveStream, ObjectSendStream
 
 from decompai_client import Object, PutRevisionBody
@@ -55,23 +56,20 @@ async def _read_objects(
     )
 
     async with (
-        status.begin_task(
-            "Decompiling", priority=2, item_count=total_objects
-        ) as task,
+        status.begin_task("local_work", item_count=total_objects) as task,
         output,
     ):
         for i, revision in enumerate(upload_revisions.revisions):
-            read_objects = []
+            read_objects = list[Object]()
             async for result in objects.read_objects(revision.addresses):
-                match result:
-                    case Object():
-                        read_objects.append(result)
-                    case objects.ReadFailure():
-                        # Don't try processing this again
-                        await env.state.mark_addresses_clean((result.address,))
-                        print(
-                            f"Error reading {result.address:08x}: {result.error}"
-                        )
+                if isinstance(result, Object):
+                    read_objects.append(result)
+                elif isinstance(result, objects.ReadFailure):
+                    # Don't try processing this again
+                    await env.state.mark_addresses_clean((result.address,))
+                    print(f"Error reading {result.address:08x}: {result.error}")
+                else:
+                    _: tye.Never = result
 
                 await task.mark_item_complete()
 
@@ -87,7 +85,7 @@ async def _upload_revisions(
 
     async with (
         status.begin_task(
-            "Uploading", priority=0, item_count=len(upload_revisions.revisions)
+            "local_work", item_count=len(upload_revisions.revisions)
         ) as task,
         input,
     ):

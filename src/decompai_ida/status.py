@@ -4,40 +4,79 @@ Utilities for reporting progress of background tasks.
 Example of reporting progress in task:
 
     ```python
-    with status.begin_task("my task") as task_progress:
-        task_progress.set_item_count(10)  # optional
+    with status.begin_task("local_work", item_count=10) as task_progress:
         task_progress.mark_item_complete()  # optional
     ```
 """
 
-from contextlib import asynccontextmanager
 import typing as ty
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import anyio
+import typing_extensions as tye
 
 from decompai_ida import ida_events
 from decompai_ida.async_utils import wait_for_object_of_type
-from decompai_ida.broadcast import Broadcast, RecordLatest
 from decompai_ida.env import Env
 
+TaskKind: tye.TypeAlias = ty.Literal[
+    # Registering binary at server.
+    "registering",
+    # E.g. waiting for auto-analysis.
+    "waiting_for_ida",
+    # Tasks that require IDA to remain open. E.g. decompiling, uploading.
+    "local_work",
+    # Tasks that don't require IDA to remain open. E.g. analysis on server,
+    # downloading.
+    "remote_work",
+]
+"Determines how the task is shown to user"
 
-@dataclass(frozen=True, kw_only=True)
+# Determines which task is preferred in status summary.
+_TASK_KIND_PRIORITY: ty.Mapping[TaskKind, int] = {
+    # Only interesting in case no other task is active, to let user know
+    # we're waiting.
+    "waiting_for_ida": 0,
+    "remote_work": 1,
+    # Most interesting - user must keep IDA open for the duration of this
+    # task.
+    "local_work": 2,
+    "registering": 2,
+}
+
+# Text to show in UI for each kind of task.
+_TASK_KIND_LABEL: ty.Mapping[TaskKind, str] = {
+    "waiting_for_ida": "Waiting for IDA",
+    "local_work": "Preparing data locally",
+    "remote_work": "Reversing on server",
+    "registering": "Registering at server",
+}
+
+# Text to show when no task is active.
+_IDLE_LABEL = "Ready"
+
+# Text to show on warning tooltip
+_WARNING_LABEL = "Can't reach server"
+
+
+@dataclass(frozen=True)
 class TaskUpdate:
-    Progress: ty.TypeAlias = int | ty.Literal["started"] | ty.Literal["done"]
+    id: int
+    task_kind: TaskKind
+    progress: "Progress"
+    warning: bool = False
+
+    Progress: tye.TypeAlias = ty.Union[
+        int, ty.Literal["started"], ty.Literal["done"]
+    ]
     """
     Task progress:
      - "started" - in progress, but progress can't be determined yet.
      - int between 0 and 100 - progress percentage.
      - "done" - complete.
     """
-
-    id: int
-    task_name: str
-    progress: Progress
-    priority: int
-    warning: str | None
 
 
 class Task:
@@ -51,10 +90,10 @@ class Task:
         def to_progress(self) -> TaskUpdate.Progress:
             return "done"
 
-    @dataclass(frozen=True, kw_only=True)
+    @dataclass(frozen=True)
     class _Items:
-        completed: int = 0
         total: int
+        completed: int = 0
 
         def to_progress(self) -> TaskUpdate.Progress:
             percentage = int((self.completed / self.total) * 100)
@@ -67,7 +106,7 @@ class Task:
                 return percentage
 
         def with_completed_item(self) -> "Task._Items":
-            return Task._Items(completed=self.completed + 1, total=self.total)
+            return Task._Items(total=self.total, completed=self.completed + 1)
 
     @dataclass(frozen=True)
     class _Percentage:
@@ -76,22 +115,20 @@ class Task:
         def to_progress(self) -> TaskUpdate.Progress:
             return int(self.value * 100)
 
-    _State: ty.TypeAlias = _Started | _Done | _Items | _Percentage
+    _State: tye.TypeAlias = ty.Union[_Started, _Done, _Items, _Percentage]
 
     def __init__(
         self,
-        name: str,
-        priority: int,
+        kind: TaskKind,
     ):
-        self._name = name
+        self._kind: TaskKind = kind
         self._task_updates = Env.get().task_updates
-        self._priority = priority
         self._state: Task._State = Task._Started()
-        self._warning: str | None = None
-        self._last_update: TaskUpdate | None = None
+        self._warning: bool = False
+        self._last_update: ty.Optional[TaskUpdate] = None
 
     async def set_item_count(self, n: int):
-        self._state = Task._Items(completed=0, total=n)
+        self._state = Task._Items(total=n, completed=0)
         await self._send_update()
 
     async def mark_item_complete(self):
@@ -99,36 +136,35 @@ class Task:
         Reports one item completed.
         """
         assert isinstance(self._state, Task._Items)
-        self._warning = None
+        self._warning = False
         self._state = self._state.with_completed_item()
         await self._send_update()
 
     async def mark_done(self):
-        self._warning = None
+        self._warning = False
         self._state = Task._Done()
         await self._send_update()
 
     async def set_progress(self, value: float):
-        self._warning = None
+        self._warning = False
         self._state = Task._Percentage(value)
         await self._send_update()
 
-    async def set_warning(self, warning: str):
+    async def set_warning(self):
         if isinstance(self._state, Task._Done):
             self._state = Task._Started()
-        self._warning = warning
+        self._warning = True
         await self._send_update()
 
     async def clear_warning(self):
-        self._warning = None
+        self._warning = False
         await self._send_update()
 
     async def _send_update(self):
         update = TaskUpdate(
             id=id(self),
-            task_name=self._name,
+            task_kind=self._kind,
             progress=self._state.to_progress(),
-            priority=self._priority,
             warning=self._warning,
         )
 
@@ -139,16 +175,16 @@ class Task:
 
 @asynccontextmanager
 async def begin_task(
-    name: str,
+    kind: TaskKind,
     *,
     priority: int = 0,
     start: bool = True,
-    item_count: int | None = None,
+    item_count: ty.Optional[int] = None,
 ) -> ty.AsyncGenerator["Task", None]:
     """
     Start a new task. Task is marked as done when context exits.
     """
-    task = Task(name, priority=priority)
+    task = Task(kind)
     if start:
         if item_count is not None:
             await task.set_item_count(item_count)
@@ -161,141 +197,103 @@ async def begin_task(
             await task.mark_done()
 
 
-async def report_status_task():
+async def summarize_task_updates():
     """
-    Show task status in UI.
+    Aggregate task updates and send `StatusSummary` objects.
     """
 
-    overall_status = Broadcast[_OverallStatus](RecordLatest())
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(
-            _print_task_updates_and_broadcast_overall_status,
-            overall_status,
-        )
-        tg.start_soon(
-            _report_overall_status_at_status_bar,
-            overall_status,
-        )
-
-
-async def _print_task_updates_and_broadcast_overall_status(
-    overall_status_broadcast: Broadcast["_OverallStatus"],
-):
+    env = Env.get()
     tasks = OrderedDict[int, TaskUpdate]()
-    last_overall_status: _OverallStatus | None = None
+    last_status_summary: ty.Optional[StatusSummary] = None
 
-    async with Env.get().task_updates.subscribe() as task_updates:
+    async with env.task_updates.subscribe() as task_updates:
         async for update in task_updates:
             if update.progress == "done":
                 tasks.pop(update.id, None)
             else:
                 tasks[update.id] = update
 
-            overall_status = _OverallStatus.from_task_updates(tasks.values())
+            status_summary = StatusSummary.from_task_updates(tasks.values())
 
-            if overall_status != last_overall_status:
-                await overall_status_broadcast.post(overall_status)
-                last_overall_status = overall_status
+            if status_summary != last_status_summary:
+                await env.status_summaries.post(status_summary)
+                last_status_summary = status_summary
 
 
-async def _report_overall_status_at_status_bar(
-    overall_status_broadcast: Broadcast["_OverallStatus"],
-):
+async def report_status_summary_at_status_bar():
     # This requires PyQt5.
     try:
         from decompai_ida.status_bar_widget import status_bar_widget_updater
     except ImportError:
         return
 
+    env = Env.get()
+
     # Wait for main window.
     async with Env.get().events.subscribe() as events_receiver:
         await wait_for_object_of_type(events_receiver, ida_events.MainUiReady)
 
-    # Pump overall status updates to status bar.
+    # Pump status summaries to status bar widget.
     async with (
-        overall_status_broadcast.subscribe() as overall_status_receiver,
+        env.status_summaries.subscribe() as status_summary_receiver,
         status_bar_widget_updater() as update_status_bar,
     ):
-        async for overall_status in overall_status_receiver:
+        async for status_summary in status_summary_receiver:
             # In case of idle, wait a bit to allow for another task to begin
             # before updating UI, to avoid quick updates in this common case.
-            if isinstance(overall_status.status, _OverallStatus.Ready):
+            if status_summary is None:
                 with anyio.move_on_after(0.25):
-                    overall_status = await overall_status_receiver.receive()
+                    status_summary = await status_summary_receiver.receive()
 
-            match overall_status.status:
-                case _OverallStatus.Ready():
-                    text = "Ready"
-                    progress = None
-                case _OverallStatus.Busy(text):
-                    progress = "busy"
-                case _OverallStatus.InProgress(text, progress):
-                    pass
+            if status_summary is not None:
+                text = _TASK_KIND_LABEL[status_summary.task_kind]
+                progress = status_summary.progress
+                warning = _WARNING_LABEL if status_summary.warning else None
+            else:
+                text = _IDLE_LABEL
+                progress = None
+                warning = None
 
             await update_status_bar(
-                text=text, progress=progress, warning=overall_status.warning
+                text=text, progress=progress, warning=warning
             )
 
 
-def _format_report(updates: ty.Sequence[TaskUpdate]):
-    if len(updates) > 0:
-        return ", ".join(
-            f"{task.task_name} ({task.progress}%)"
-            if isinstance(task.progress, int)
-            else task.task_name
-            for task in updates
-        )
-    else:
-        return "idle"
+@dataclass(frozen=True)
+class StatusSummary:
+    """
+    Summary of active tasks.
+    """
 
-
-@dataclass(frozen=True, kw_only=True)
-class _OverallStatus:
-    @dataclass(frozen=True)
-    class Ready:
-        pass
-
-    @dataclass(frozen=True)
-    class Busy:
-        text: str
-
-    @dataclass(frozen=True)
-    class InProgress:
-        text: str
-        progress: int
-
-    status: Ready | Busy | InProgress
-    warning: str | None = None
+    task_kind: TaskKind
+    progress: ty.Union[int, ty.Literal["started"]]
+    warning: bool = False
 
     @staticmethod
     def from_task_updates(
         updates: ty.Iterable[TaskUpdate],
-    ) -> "_OverallStatus":
+    ) -> ty.Optional["StatusSummary"]:
         updates = list(updates)
 
         if len(updates) == 0:
-            return _OverallStatus(status=_OverallStatus.Ready())
+            return None
+
+        def priority_for_task_update(update: TaskUpdate) -> tuple[int, bool]:
+            # Sort first by kind, then prefer showing actual progress
+            kind_priority = _TASK_KIND_PRIORITY[update.task_kind]
+            has_progress = isinstance(update.progress, int)
+            return kind_priority, has_progress
 
         by_priority = sorted(
-            updates, key=lambda update: update.priority, reverse=True
+            updates, key=priority_for_task_update, reverse=True
         )
-
         highest_priority = by_priority[0]
-        match highest_priority.progress:
-            case "started" | "done":
-                status = _OverallStatus.Busy(highest_priority.task_name)
-            case int(progress):
-                status = _OverallStatus.InProgress(
-                    highest_priority.task_name, progress
-                )
+        assert highest_priority.progress != "done"
 
-        warning = next(
-            (
-                update.warning
-                for update in by_priority
-                if update.warning is not None
-            ),
-            None,
+        any_warning = any(update.warning for update in by_priority)
+
+        return StatusSummary(
+            task_kind=highest_priority.task_kind,
+            progress=highest_priority.progress,
+            warning=any_warning,
         )
-
-        return _OverallStatus(status=status, warning=warning)

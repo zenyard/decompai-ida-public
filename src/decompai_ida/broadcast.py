@@ -1,9 +1,10 @@
+import threading
+import typing as ty
 from abc import abstractmethod
 from collections import OrderedDict
-import typing as ty
-import threading
-from anyio.abc import AsyncResource, ObjectReceiveStream, ObjectSendStream
+
 import anyio
+from anyio.abc import AsyncResource, ObjectReceiveStream, ObjectSendStream
 
 _T = ty.TypeVar("_T")
 
@@ -29,7 +30,7 @@ class RecordLatest(Recorder, ty.Generic[_T]):
     Only hold one latest message, similar to Tokio `watch_channel`.
     """
 
-    _recorded: tuple[()] | tuple[_T] = ()
+    _recorded: ty.Union[tuple[()], tuple[_T]] = ()
 
     def record(self, message: _T):
         self._recorded = (message,)

@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import threading
-from types import EllipsisType
 import typing as ty
 from pathlib import Path
 from textwrap import indent
@@ -59,8 +58,8 @@ def main():
 
 
 def check_prerequisites():
-    if sys.version_info < (3, 10):
-        raise Exception(f"Python 3.10 or higher required, got {sys.version}")
+    if sys.version_info < (3, 9):
+        raise Exception(f"Python 3.9 or higher required, got {sys.version}")
 
     ida_version = run_in_ui(ida_kernwin.get_kernel_version)
     ida_major = int(ida_version.split(".")[0])
@@ -74,6 +73,20 @@ def check_prerequisites():
         import pip  # type: ignore  # noqa: F401
     except ImportError:
         raise Exception("Pip is required for installation")
+
+    try:
+        # IDA ships with PyQt5 version per Python release. Not being able to
+        # import PyQt5 is a sign of IDA being incompatible with Python.
+        from PyQt5.QtCore import Qt  # noqa: F401
+        from PyQt5.QtGui import QPixmap  # noqa: F401
+        from PyQt5.QtWidgets import QApplication  # noqa: F401
+    except ImportError:
+        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        raise Exception(
+            f"IDA {ida_version} isn't compatible with Python {py_version}. "
+            "Please upgrade IDA or downgrade Python."
+        )
 
 
 def request_api_key():
@@ -131,16 +144,23 @@ def run_pip(args: ty.Iterable[str]):
 
 def python_executable() -> Path:
     base_path = Path(sys.prefix)
-    if sys.platform == "win32":
-        exe_path_venv = base_path / "Scripts" / "Python.exe"
-        executable = (
-            exe_path_venv
-            if exe_path_venv.exists()
-            else base_path / "Python.exe"
-        )
-    else:
-        executable = base_path / "bin" / f"python{sys.version_info.major}"
-    return executable
+    py_version = sys.version_info
+    candidates = [
+        base_path / "Scripts" / "Python.exe",
+        base_path / "Python.exe",
+        base_path / "bin" / f"python{py_version.major}",
+        base_path / "bin" / f"python{py_version.major}.{py_version.minor}",
+        base_path / "Python",
+    ]
+
+    existing = next(
+        (candidate for candidate in candidates if candidate.exists()), None
+    )
+
+    if existing is None:
+        raise Exception("Can't find Python executable")
+
+    return existing
 
 
 def install_stub_file():
@@ -163,9 +183,13 @@ def install_configuration(*, api_key: str):
 T = ty.TypeVar("T")
 
 
+class NoOutput:
+    pass
+
+
 def run_in_ui(func: ty.Callable[[], T]) -> T:
-    output: EllipsisType | T = ...
-    error: Exception | None = None
+    output: ty.Union[T, NoOutput] = NoOutput()
+    error: ty.Optional[Exception] = None
 
     def perform():
         nonlocal output, error
@@ -179,7 +203,7 @@ def run_in_ui(func: ty.Callable[[], T]) -> T:
     if error is not None:
         raise error
     else:
-        assert not isinstance(output, EllipsisType)
+        assert not isinstance(output, NoOutput)
         return output
 
 

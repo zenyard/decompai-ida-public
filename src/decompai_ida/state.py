@@ -1,7 +1,8 @@
 import typing as ty
-from pydantic import TypeAdapter
 
+import typing_extensions as tye
 from netnode import Netnode
+from pydantic import TypeAdapter
 
 from decompai_client import Inference
 from decompai_ida import ida_tasks
@@ -41,7 +42,7 @@ class State:
         return binary_id
 
     async def set_binary_id(self, binary_id: str):
-        def set_if_unset(current: str | None):
+        def set_if_unset(current: ty.Optional[str]):
             if current is not None:
                 raise Exception("Binary ID already set to " + current)
             return binary_id
@@ -82,13 +83,20 @@ class State:
         for address in addresses:
             self._dirty.write_sync(address, False)
 
-    def is_address_dirty_sync(self, address: int) -> bool:
-        return self._dirty.read_sync(address, bool, default=True)
+    @ida_tasks.read_generator
+    def filter_clean_addresses(
+        self, addresses: ty.Iterable[int]
+    ) -> ty.Iterator[int]:
+        return (
+            address
+            for address in addresses
+            if self._dirty.read_sync(address, bool, default=True)
+        )
 
 
 _T = ty.TypeVar("_T")
 _U = ty.TypeVar("_U")
-_Key: ty.TypeAlias = str | int
+_Key: tye.TypeAlias = ty.Union[str, int]
 
 
 class _Node:
@@ -107,12 +115,12 @@ class _Node:
     @ida_tasks.read
     def read(
         self, key: _Key, type_: type[_T], *, default: _U = None
-    ) -> _T | _U:
+    ) -> ty.Union[_T, _U]:
         return self.read_sync(key, type_, default=default)
 
     def read_sync(
         self, key: _Key, type_: type[_T], *, default: _U = None
-    ) -> _T | _U:
+    ) -> ty.Union[_T, _U]:
         value = self._inner.get(key)
         if value is not None:
             return TypeAdapter(type_).validate_python(value)
@@ -133,7 +141,7 @@ class _Node:
         self,
         key: _Key,
         type_: ty.Any,
-        modifier: ty.Callable[[_T | _U], _T],
+        modifier: ty.Callable[[ty.Union[_T, _U]], _T],
         *,
         initial: _U = None,
     ) -> _T:
@@ -143,7 +151,7 @@ class _Node:
         self,
         key: _Key,
         type_: ty.Any,
-        modifier: ty.Callable[[_T | _U], _T],
+        modifier: ty.Callable[[ty.Union[_T, _U]], _T],
         *,
         initial: _U = None,
     ) -> _T:

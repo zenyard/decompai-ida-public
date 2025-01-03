@@ -1,6 +1,6 @@
 from threading import Thread
-import anyio
 
+import anyio
 import ida_idaapi
 
 from decompai_ida import ida_events

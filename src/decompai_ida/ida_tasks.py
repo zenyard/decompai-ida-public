@@ -14,18 +14,20 @@ Utilities:
 """
 
 import asyncio
-from contextlib import contextmanager
 import contextvars
 import time
 import typing as ty
+from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from itertools import islice
 
 import anyio
 import ida_kernwin
+import typing_extensions as tye
 
-_T = ty.TypeVar("_T")
-_P = ty.ParamSpec("_P")
+_R = ty.TypeVar("_R", contravariant=True)
+_P = tye.ParamSpec("_P")
 
 _running_in_task = contextvars.ContextVar("running_in_task", default=False)
 
@@ -46,13 +48,15 @@ def _set_running_in_task(value: bool):
 
 def _make_decorator(flags: int):
     def decorator(
-        func: ty.Callable[_P, _T],
-    ) -> ty.Callable[_P, ty.Awaitable[_T]]:
+        func: ty.Callable[_P, _R],
+    ) -> ty.Callable[_P, ty.Awaitable[_R]]:
+        @wraps(func)
         async def wrapped(*args: _P.args, **kwargs: _P.kwargs):
             return await _run_in_main(
                 lambda: func(*args, **kwargs), flags=flags
             )
 
+        setattr(wrapped, "_ida_task", True)
         return wrapped
 
     return decorator
@@ -60,8 +64,8 @@ def _make_decorator(flags: int):
 
 def _make_runner(flags: int):
     async def runner(
-        func: ty.Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs
-    ) -> _T:
+        func: ty.Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs
+    ) -> _R:
         return await _run_in_main(lambda: func(*args, **kwargs), flags=flags)
 
     return runner
@@ -69,10 +73,10 @@ def _make_runner(flags: int):
 
 def _make_iter(flags: int):
     async def convert_iter(
-        iter: ty.Iterator[_T], *, max_items=4096, max_time=0.2
-    ) -> ty.AsyncIterator[_T]:
+        iter: ty.Iterator[_R], *, max_items=4096, max_time=0.2
+    ) -> ty.AsyncIterator[_R]:
         def read_chunk():
-            chunk = list[_T]()
+            chunk = list[_R]()
             sliced_iter = islice(iter, max_items)
             start_time = time.monotonic()
             for item in sliced_iter:
@@ -95,14 +99,40 @@ def _make_generator_decorator(flags: int):
     to_async_iter = _make_iter(flags)
 
     def decorator(
-        generator: ty.Callable[_P, ty.Iterator[_T]],
-    ) -> ty.Callable[_P, ty.AsyncIterator[_T]]:
+        generator: ty.Callable[_P, ty.Iterator[_R]],
+    ) -> ty.Callable[_P, ty.AsyncIterator[_R]]:
+        @wraps(generator)
         def wrapped(*args: _P.args, **kwargs: _P.kwargs):
             return to_async_iter(generator(*args, **kwargs))
 
+        setattr(wrapped, "_ida_task", True)
         return wrapped
 
     return decorator
+
+
+@ty.overload
+def run_sync(
+    func: ty.Callable[_P, ty.Awaitable[_R]], *args: _P.args, **kwargs: _P.kwargs
+) -> _R: ...
+
+
+@ty.overload
+def run_sync(
+    func: ty.Callable[_P, ty.AsyncIterator[_R]],
+    *args: _P.args,
+    **kwargs: _P.kwargs,
+) -> ty.Iterator[_R]: ...
+
+
+def run_sync(func, *args, **kwargs):
+    """
+    Run a function wrapped with decorator from this module directly.
+
+    Must be called from IDA's thread.
+    """
+    assert hasattr(func, "_ida_task"), "Can't run_sync on non-wrapped function"
+    return func.__wrapped__(*args, **kwargs)
 
 
 # Currently we never request MFF_READ, as it proves hard to tell which API only
@@ -124,13 +154,13 @@ write_iter = _make_iter(ida_kernwin.MFF_WRITE)
 
 
 @dataclass
-class _Success(ty.Generic[_T]):
-    value: _T
+class _Success(ty.Generic[_R]):
+    value: _R
 
 
 @dataclass
 class _Failure:
-    value: Exception
+    ex: Exception
 
 
 @dataclass
@@ -138,8 +168,8 @@ class _Missing:
     pass
 
 
-async def _run_in_main(func: ty.Callable[[], _T], *, flags: int) -> _T:
-    output: _Success | _Failure | _Missing = _Missing()
+async def _run_in_main(func: ty.Callable[[], _R], *, flags: int) -> _R:
+    output: ty.Union[_Success, _Failure, _Missing] = _Missing()
     done = anyio.Event()
     cancelled = False
     context = contextvars.copy_context()
@@ -160,23 +190,28 @@ async def _run_in_main(func: ty.Callable[[], _T], *, flags: int) -> _T:
             done.set()
 
     # Use MFF_NOWAIT so event loop is not blocked.
-    ida_kernwin.execute_sync(perform, flags | ida_kernwin.MFF_NOWAIT)
+    _execute_sync(perform, flags | ida_kernwin.MFF_NOWAIT)
     try:
         await done.wait()
     except:
         cancelled = True
         raise
 
-    assert not isinstance(output, _Missing), "missing output"
+    assert isinstance(output, (_Success, _Failure)), "missing output"
 
-    match output:
-        case _Success(value):
-            return value
-        case _Failure(ex):
-            raise ex
+    if isinstance(output, _Success):
+        return output.value
+    elif isinstance(output, _Failure):
+        raise output.ex
+    else:
+        _: tye.Never = output
 
 
-_P = ty.ParamSpec("_P")
+# Patched in tests.
+_execute_sync = ida_kernwin.execute_sync
+
+
+_P = tye.ParamSpec("_P")
 
 
 class AsyncCallback(ty.Generic[_P]):

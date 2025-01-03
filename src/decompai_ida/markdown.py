@@ -2,8 +2,8 @@
 Minimal formatting for markdown.
 """
 
-from textwrap import wrap
 import re
+from textwrap import wrap
 
 _WIDTH = 80
 _INDENT_PATTERN = re.compile(r"^(\s*(?:[-+*]\s+)?)(.*)$")

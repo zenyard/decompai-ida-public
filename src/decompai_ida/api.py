@@ -1,15 +1,18 @@
 import typing as ty
-from pathlib import Path
-from aiohttp.client_exceptions import ClientConnectionError
 from asyncio.exceptions import TimeoutError
+from pathlib import Path
 
 import anyio
 import ida_diskio
+import typing_extensions as tye
+from aiohttp.client_exceptions import ClientConnectionError
 from pydantic import BaseModel, StringConstraints, UrlConstraints
 from pydantic_core import Url
 
 from decompai_client import (
     ApiClient,
+)
+from decompai_client import (
     Configuration as ApiConfiguration,
 )
 from decompai_client.exceptions import ServiceException
@@ -19,7 +22,7 @@ _CONFIG_FILENAME = "decompai.json"
 _RETRY_DELAY = 3
 
 _T = ty.TypeVar("_T")
-_P = ty.ParamSpec("_P")
+_P = tye.ParamSpec("_P")
 
 
 class BadConfigurationFile(Exception):
@@ -87,7 +90,7 @@ async def retry_forever(
             return result
         except Exception as ex:
             if is_temporary_error(ex):
-                await task.set_warning("Can't reach server")
+                await task.set_warning()
                 await anyio.sleep(_RETRY_DELAY)
             else:
                 raise

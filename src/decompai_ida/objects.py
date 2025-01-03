@@ -8,10 +8,8 @@ import idautils
 from idaapi import BADADDR
 from more_itertools import ilen, take
 
-from decompai_client import Name
 from decompai_client.models import Function, Object, Thunk
-from decompai_ida import api, ida_tasks
-from decompai_ida.env import Env
+from decompai_ida import api, ida_tasks, inferences
 
 _MAX_INSTRUCTIONS_TO_DECOMPILE = 0x2000
 """
@@ -20,7 +18,7 @@ long time, and will probably be too large for model.
 """
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class ReadFailure:
     address: int
     error: Exception
@@ -31,7 +29,7 @@ class ReadFailure:
 @ida_tasks.write_generator
 def read_objects(
     addresses: ty.Iterable[int],
-) -> ty.Iterator[Object | ReadFailure]:
+) -> ty.Iterator[ty.Union[Object, ReadFailure]]:
     for address in addresses:
         try:
             yield _read_object_sync(address)
@@ -46,7 +44,6 @@ def _read_object_sync(address: int) -> Object:
     If `func_graph` is available, it will be used to avoid traversing the
     function for calls.
     """
-    state = Env.get().state
     func = ida_funcs.get_func(address)
     assert func is not None
     assert func.start_ea == address
@@ -79,13 +76,10 @@ def _read_object_sync(address: int) -> Object:
 
         if decompiled is None:
             raise Exception(f"Can't decompile: {failure.desc()}")
-
         code = str(decompiled)
-        inferences = state.get_inferences_for_address_sync(address)
-        is_named_by_plugin = any(
-            isinstance(inference.actual_instance, Name)
-            and inference.actual_instance.name in name
-            for inference in inferences
+
+        has_known_name = ida_tasks.run_sync(
+            inferences.has_user_defined_name, address
         )
 
         return Object(
@@ -94,9 +88,7 @@ def _read_object_sync(address: int) -> Object:
                 name=name,
                 code=code,
                 calls=_get_calls_sync(address),
-                has_known_name=(
-                    ida_name.is_uname(name) and not is_named_by_plugin
-                ),
+                has_known_name=has_known_name,
             )
         )
 

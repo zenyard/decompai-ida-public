@@ -1,20 +1,26 @@
 from dataclasses import dataclass
+
 import anyio
 import exceptiongroup
 import ida_auto
 import ida_kernwin
 
-from decompai_client import ApiClient, BinariesApi
+from decompai_client import ApiClient, BinariesApi, PostBinaryBody
 from decompai_client.exceptions import ForbiddenException, UnauthorizedException
-from decompai_ida import api, ida_events, ida_tasks, status
+from decompai_ida import api, binary, ida_events, ida_tasks, status
 from decompai_ida.async_utils import wait_for_object_of_type
-from decompai_ida.broadcast import Broadcast
-from decompai_ida.env import Env, use_env
+from decompai_ida.broadcast import Broadcast, RecordLatest
+from decompai_ida.env import Env
 from decompai_ida.initial_analysis import perform_initial_analysis
 from decompai_ida.monitor_analysis import monitor_analysis
+from decompai_ida.poll_server import poll_server_task
 from decompai_ida.state import State
 from decompai_ida.track_changes import track_changes_task
 from decompai_ida.upload_revisions import upload_revisions_task
+
+_MAX_SUPPORTED_BINARY_SIZE_MB = 2
+_OBJECTS_PER_REVISION = 256
+_BUFFER_CHANGES_PERIOD = 1
 
 
 async def main(event_collector: ida_events.EventCollector):
@@ -80,39 +86,58 @@ async def _watch_for_database(global_env: _GlobalEnv):
 
 
 async def _database_flow(global_env: _GlobalEnv):
+    if await binary.get_size() >= _MAX_SUPPORTED_BINARY_SIZE_MB * 2**20:
+        await ida_tasks.run_ui(
+            ida_kernwin.warning,
+            "The demo version of DecompAI supports binaries up to "
+            f"{_MAX_SUPPORTED_BINARY_SIZE_MB}MB (full versions have no limit). "
+            "As this database exceeds the limit, DecompAI has been disabled for this session.",
+        )
+        return
+
     async with anyio.create_task_group() as tg:
         env = Env(
             state=await State.create(),
             binaries_api=BinariesApi(global_env.api_client),
             events=global_env.events,
             revisions=Broadcast(),
-            uploaded_revisions=Broadcast(),
+            uploaded_revisions=Broadcast(RecordLatest()),
             task_updates=Broadcast(),
+            status_summaries=Broadcast(RecordLatest()),
+            server_states=Broadcast(RecordLatest()),
+            initial_analysis_complete=anyio.Event(),
         )
 
-        with use_env(env):
-            tg.start_soon(status.report_status_task)
+        with env.use():
+            tg.start_soon(status.summarize_task_updates)
+            tg.start_soon(status.report_status_summary_at_status_bar)
 
-            await _register_binary()
+            is_unregistered = (await env.state.try_get_binary_id()) is None
+            if is_unregistered:
+                await _register_binary()
+                tg.start_soon(_upload_original_files)
 
             tg.start_soon(monitor_analysis)
             tg.start_soon(upload_revisions_task)
+            tg.start_soon(poll_server_task)
+            tg.start_soon(track_changes_task, _BUFFER_CHANGES_PERIOD)
 
             await _wait_for_auto_analysis()
-            await perform_initial_analysis(objects_per_revision=256)
-            await track_changes_task()
+            tg.start_soon(perform_initial_analysis, _OBJECTS_PER_REVISION)
 
 
 async def _register_binary():
     env = Env.get()
 
     existing_binary_id = await env.state.try_get_binary_id()
-    if existing_binary_id is not None:
-        return existing_binary_id
+    assert existing_binary_id is None
 
-    async with status.begin_task("Registering database") as task:
+    binary_path = await binary.get_binary_path()
+    post_body = PostBinaryBody(name=binary_path.name)
+
+    async with status.begin_task("registering") as task:
         result = await api.retry_forever(
-            env.binaries_api.create_binary, task=task
+            lambda: env.binaries_api.create_binary(post_body), task=task
         )
 
     await env.state.set_binary_id(result.binary_id)
@@ -121,7 +146,7 @@ async def _register_binary():
 async def _wait_for_auto_analysis():
     async with (
         Env.get().events.subscribe() as event_receiver,
-        status.begin_task("Waiting for AU"),
+        status.begin_task("waiting_for_ida"),
     ):
         while not await ida_tasks.run_read(ida_auto.auto_is_ok):
             with anyio.move_on_after(1):
@@ -129,3 +154,33 @@ async def _wait_for_auto_analysis():
                     event_receiver,
                     ida_events.InitialAutoAnalysisComplete,
                 )
+
+
+async def _upload_original_files():
+    env = Env.get()
+    binary_id = await env.state.get_binary_id()
+
+    try:
+        input_file = await binary.read_compressed_input_file()
+    except Exception:
+        # Not critical for plugin.
+        return
+
+    async with status.begin_task("local_work") as task:
+        while True:
+            try:
+                await env.binaries_api.put_original_file(
+                    binary_id=binary_id,
+                    name=input_file.name,
+                    data=input_file.data,
+                )
+                break
+
+            except Exception as ex:
+                if api.is_temporary_error(ex):
+                    await task.set_warning()
+                    continue
+
+                else:
+                    # Not critical for plugin.
+                    break

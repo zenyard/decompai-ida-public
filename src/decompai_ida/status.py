@@ -9,6 +9,7 @@ Example of reporting progress in task:
     ```
 """
 
+import time
 import typing as ty
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -59,6 +60,10 @@ _IDLE_LABEL = "Ready"
 
 # Text to show on warning tooltip
 _WARNING_LABEL = "Can't reach server"
+
+# Time, in seconds, between warning being set until it is actually reported to
+# user.
+_WARNING_GRACE_PERIOD = 60
 
 
 @dataclass(frozen=True)
@@ -124,7 +129,7 @@ class Task:
         self._kind: TaskKind = kind
         self._task_updates = Env.get().task_updates
         self._state: Task._State = Task._Started()
-        self._warning: bool = False
+        self._warning_start_time: ty.Optional[float] = None
         self._last_update: ty.Optional[TaskUpdate] = None
 
     async def set_item_count(self, n: int):
@@ -136,36 +141,42 @@ class Task:
         Reports one item completed.
         """
         assert isinstance(self._state, Task._Items)
-        self._warning = False
+        self._warning_start_time = None
         self._state = self._state.with_completed_item()
         await self._send_update()
 
     async def mark_done(self):
-        self._warning = False
+        self._warning_start_time = None
         self._state = Task._Done()
         await self._send_update()
 
     async def set_progress(self, value: float):
-        self._warning = False
+        self._warning_start_time = None
         self._state = Task._Percentage(value)
         await self._send_update()
 
     async def set_warning(self):
         if isinstance(self._state, Task._Done):
             self._state = Task._Started()
-        self._warning = True
+        if self._warning_start_time is None:
+            self._warning_start_time = _get_monotonic_time()
         await self._send_update()
 
     async def clear_warning(self):
-        self._warning = False
+        self._warning_start_time = None
         await self._send_update()
 
     async def _send_update(self):
+        warning = self._warning_start_time is not None and (
+            _get_monotonic_time() - self._warning_start_time
+            > _WARNING_GRACE_PERIOD
+        )
+
         update = TaskUpdate(
             id=id(self),
             task_kind=self._kind,
             progress=self._state.to_progress(),
-            warning=self._warning,
+            warning=warning,
         )
 
         if update != self._last_update:
@@ -297,3 +308,7 @@ class StatusSummary:
             progress=highest_priority.progress,
             warning=any_warning,
         )
+
+
+# Patched in tests
+_get_monotonic_time = time.monotonic

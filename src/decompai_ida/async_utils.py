@@ -11,3 +11,12 @@ async def wait_for_object_of_type(
     async for item in receiver:
         if isinstance(item, type_):
             return item
+
+
+async def collect(async_iterable: ty.AsyncIterable[_T]) -> list[_T]:
+    return [item async for item in async_iterable]
+
+
+async def consume(async_iterable: ty.AsyncIterable[None]):
+    async for _ in async_iterable:
+        pass

@@ -1,13 +1,9 @@
 import typing as ty
 from asyncio.exceptions import TimeoutError
-from pathlib import Path
 
 import anyio
-import ida_diskio
 import typing_extensions as tye
 from aiohttp.client_exceptions import ClientConnectionError
-from pydantic import BaseModel, StringConstraints, UrlConstraints
-from pydantic_core import Url
 
 from decompai_client import (
     ApiClient,
@@ -16,57 +12,22 @@ from decompai_client import (
     Configuration as ApiConfiguration,
 )
 from decompai_client.exceptions import ServiceException
-from decompai_ida import ida_tasks, status
+from decompai_ida import status
+from decompai_ida.configuration import PluginConfiguration
 
-_CONFIG_FILENAME = "decompai.json"
 _RETRY_DELAY = 3
 
 _T = ty.TypeVar("_T")
 _P = tye.ParamSpec("_P")
 
 
-class BadConfigurationFile(Exception):
-    def __init__(self, config_path: Path):
-        super().__init__(f"Missing or bad configuration file at {config_path}")
-
-
-class PluginConfiguration(BaseModel, frozen=True):
-    api_url: ty.Annotated[
-        Url,
-        UrlConstraints(
-            allowed_schemes=["http", "https"],
-            host_required=True,
-            max_length=2048,
-        ),
-    ]
-    api_key: ty.Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=2048),
-    ]
-
-
-async def get_api_client() -> ApiClient:
-    config_path = await get_config_path()
-
-    try:
-        async with await anyio.open_file(config_path) as config_file:
-            plugin_config = PluginConfiguration.model_validate_json(
-                await config_file.read()
-            )
-    except Exception:
-        raise BadConfigurationFile(config_path)
-
+def get_api_client(plugin_config: PluginConfiguration) -> ApiClient:
     return ApiClient(
         ApiConfiguration(
             host=str(plugin_config.api_url).rstrip("/"),
             api_key={"APIKeyHeader": plugin_config.api_key},
         )
     )
-
-
-@ida_tasks.ui
-def get_config_path() -> Path:
-    return Path(ida_diskio.get_user_idadir()) / _CONFIG_FILENAME
 
 
 def is_temporary_error(error: Exception):

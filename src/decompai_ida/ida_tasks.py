@@ -1,16 +1,16 @@
 """
-Allows running code that accesses IDA's API.
-
-All utilities have 3 permission levels:
-- ui - may only access UI.
-- read - may also read from database.
-- write - may also write to database.
+Allows running code that accesses IDA's API from async.
 
 Utilities:
-- `ui/read/write` - decorator for converting sync code to async.
-- `ui/read/write_generator` - decorator for converting sync generator to async generator.
-- `run_ui/read/write` - call a sync function from async.
-- `ui/read/write_iter` - turn iterator to async iterator (useful with idautils).
+- `wrap` - decorator for converting sync code to async.
+- `wrap_generator` - decorator for converting sync generator to async generator.
+- `run` - call a sync function from async.
+- `run_ui` - modify UI from async.
+- `wrap_iterator` - turn iterator to async iterator (useful with idautils).
+- `for_each` - apply function on each element from async.
+
+Decorators are currently not suitable for methods. Decorated functions offer
+their original counterpart under `sync` method.
 """
 
 import asyncio
@@ -26,10 +26,23 @@ import anyio
 import ida_kernwin
 import typing_extensions as tye
 
-_R = ty.TypeVar("_R", contravariant=True)
+_T = ty.TypeVar("_T")
+_R = ty.TypeVar("_R", covariant=True)
 _P = tye.ParamSpec("_P")
 
 _running_in_task = contextvars.ContextVar("running_in_task", default=False)
+
+
+class WrappedFunc(ty.Protocol, ty.Generic[_P, _R]):
+    async def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R: ...
+    def sync(self, *args: _P.args, **kwargs: _P.kwargs) -> _R: ...
+
+
+class WrappedGenerator(ty.Protocol, ty.Generic[_P, _R]):
+    def __call__(
+        self, *args: _P.args, **kwargs: _P.kwargs
+    ) -> ty.AsyncIterator[_R]: ...
+    def sync(self, *args: _P.args, **kwargs: _P.kwargs) -> ty.Iterator[_R]: ...
 
 
 def is_running_in_task() -> bool:
@@ -46,111 +59,72 @@ def _set_running_in_task(value: bool):
         _running_in_task.reset(token)
 
 
-def _make_decorator(flags: int):
-    def decorator(
-        func: ty.Callable[_P, _R],
-    ) -> ty.Callable[_P, ty.Awaitable[_R]]:
-        @wraps(func)
-        async def wrapped(*args: _P.args, **kwargs: _P.kwargs):
-            return await _run_in_main(
-                lambda: func(*args, **kwargs), flags=flags
-            )
+def wrap(func: ty.Callable[_P, _R]) -> WrappedFunc[_P, _R]:
+    @wraps(func)
+    async def wrapped(*args: _P.args, **kwargs: _P.kwargs):
+        return await _run_in_main(lambda: func(*args, **kwargs))
 
-        setattr(wrapped, "_ida_task", True)
-        return wrapped
-
-    return decorator
+    setattr(wrapped, "sync", func)
+    return ty.cast(ty.Any, wrapped)
 
 
-def _make_runner(flags: int):
-    async def runner(
-        func: ty.Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs
-    ) -> _R:
-        return await _run_in_main(lambda: func(*args, **kwargs), flags=flags)
-
-    return runner
+async def run(
+    func: ty.Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs
+) -> _R:
+    return await _run_in_main(lambda: func(*args, **kwargs))
 
 
-def _make_iter(flags: int):
-    async def convert_iter(
-        iter: ty.Iterator[_R], *, max_items=4096, max_time=0.2
-    ) -> ty.AsyncIterator[_R]:
-        def read_chunk():
-            chunk = list[_R]()
-            sliced_iter = islice(iter, max_items)
-            start_time = time.monotonic()
-            for item in sliced_iter:
-                chunk.append(item)
-                elapsed = time.monotonic() - start_time
-                if elapsed >= max_time:
-                    return chunk, True
-            return chunk, len(chunk) == max_items
-
-        should_continue = True
-        while should_continue:
-            chunk, should_continue = await _run_in_main(read_chunk, flags=flags)
-            for item in chunk:
-                yield item
-
-    return convert_iter
-
-
-def _make_generator_decorator(flags: int):
-    to_async_iter = _make_iter(flags)
-
-    def decorator(
-        generator: ty.Callable[_P, ty.Iterator[_R]],
-    ) -> ty.Callable[_P, ty.AsyncIterator[_R]]:
-        @wraps(generator)
-        def wrapped(*args: _P.args, **kwargs: _P.kwargs):
-            return to_async_iter(generator(*args, **kwargs))
-
-        setattr(wrapped, "_ida_task", True)
-        return wrapped
-
-    return decorator
-
-
-@ty.overload
-def run_sync(
-    func: ty.Callable[_P, ty.Awaitable[_R]], *args: _P.args, **kwargs: _P.kwargs
-) -> _R: ...
-
-
-@ty.overload
-def run_sync(
-    func: ty.Callable[_P, ty.AsyncIterator[_R]],
-    *args: _P.args,
-    **kwargs: _P.kwargs,
-) -> ty.Iterator[_R]: ...
-
-
-def run_sync(func, *args, **kwargs):
+async def run_ui(
+    func: ty.Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs
+) -> _R:
     """
-    Run a function wrapped with decorator from this module directly.
+    Like `run`, but function is called sooner and without access to DB.
 
-    Must be called from IDA's thread.
+    Only suitable for updating UI.
     """
-    assert hasattr(func, "_ida_task"), "Can't run_sync on non-wrapped function"
-    return func.__wrapped__(*args, **kwargs)
+    return await _run_in_main(
+        lambda: func(*args, **kwargs), flags=ida_kernwin.MFF_FAST
+    )
 
 
-# Currently we never request MFF_READ, as it proves hard to tell which API only
-# reads the DB (e.g. `ida_hexrays.decompile` writes), and getting this wrong may
-# lead to crashes.
+async def wrap_iter(
+    iter: ty.Iterator[_R], *, max_items=4096, max_time=0.2
+) -> ty.AsyncIterator[_R]:
+    def read_chunk():
+        chunk = list[_R]()
+        sliced_iter = islice(iter, max_items)
+        start_time = time.monotonic()
+        for item in sliced_iter:
+            chunk.append(item)
+            elapsed = time.monotonic() - start_time
+            if elapsed >= max_time:
+                return chunk, True
+        return chunk, len(chunk) == max_items
 
-ui = _make_decorator(ida_kernwin.MFF_FAST)
-read = _make_decorator(ida_kernwin.MFF_WRITE)
-write = _make_decorator(ida_kernwin.MFF_WRITE)
-ui_generator = _make_generator_decorator(ida_kernwin.MFF_FAST)
-read_generator = _make_generator_decorator(ida_kernwin.MFF_WRITE)
-write_generator = _make_generator_decorator(ida_kernwin.MFF_WRITE)
-run_ui = _make_runner(ida_kernwin.MFF_FAST)
-run_read = _make_runner(ida_kernwin.MFF_WRITE)
-run_write = _make_runner(ida_kernwin.MFF_WRITE)
-ui_iter = _make_iter(ida_kernwin.MFF_FAST)
-read_iter = _make_iter(ida_kernwin.MFF_WRITE)
-write_iter = _make_iter(ida_kernwin.MFF_WRITE)
+    should_continue = True
+    while should_continue:
+        chunk, should_continue = await _run_in_main(read_chunk)
+        for item in chunk:
+            yield item
+
+
+def wrap_generator(
+    generator: ty.Callable[_P, ty.Iterator[_R]],
+) -> WrappedGenerator[_P, _R]:
+    @wraps(generator)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs):
+        return wrap_iter(generator(*args, **kwargs))
+
+    setattr(wrapped, "sync", generator)
+    return ty.cast(ty.Any, wrapped)
+
+
+async def for_each(
+    iterable: ty.Iterable[_T],
+    func: ty.Callable[[_T], None],
+) -> None:
+    async for _ in wrap_iter(func(item) for item in iterable):
+        pass
 
 
 @dataclass
@@ -168,7 +142,9 @@ class _Missing:
     pass
 
 
-async def _run_in_main(func: ty.Callable[[], _R], *, flags: int) -> _R:
+async def _run_in_main(
+    func: ty.Callable[[], _R], flags=ida_kernwin.MFF_WRITE
+) -> _R:
     output: ty.Union[_Success, _Failure, _Missing] = _Missing()
     done = anyio.Event()
     cancelled = False
@@ -189,7 +165,6 @@ async def _run_in_main(func: ty.Callable[[], _R], *, flags: int) -> _R:
         finally:
             done.set()
 
-    # Use MFF_NOWAIT so event loop is not blocked.
     _execute_sync(perform, flags | ida_kernwin.MFF_NOWAIT)
     try:
         await done.wait()
@@ -236,3 +211,10 @@ class AsyncCallback(ty.Generic[_P]):
             await self._context.run(self._callback, *args, **kwargs)
 
         asyncio.run_coroutine_threadsafe(run(), loop=self._loop)
+
+
+def _get_flags(*, database_access: bool):
+    # We never request MFF_READ, as it proves hard to tell which API only reads
+    # the DB (e.g. `ida_hexrays.decompile` writes), and getting this wrong may
+    # lead to errors and crashes.
+    return ida_kernwin.MFF_WRITE if database_access else ida_kernwin.MFF_FAST

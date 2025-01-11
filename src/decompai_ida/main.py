@@ -1,22 +1,33 @@
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import anyio
 import exceptiongroup
-import ida_auto
 import ida_kernwin
 
-from decompai_client import ApiClient, BinariesApi, PostBinaryBody
+from decompai_client import BinariesApi, PostBinaryBody
 from decompai_client.exceptions import ForbiddenException, UnauthorizedException
-from decompai_ida import api, binary, ida_events, ida_tasks, status
+from decompai_ida import (
+    api,
+    binary,
+    ida_events,
+    ida_tasks,
+    state,
+    status,
+    configuration,
+)
 from decompai_ida.async_utils import wait_for_object_of_type
 from decompai_ida.broadcast import Broadcast, RecordLatest
 from decompai_ida.env import Env
-from decompai_ida.initial_analysis import perform_initial_analysis
+from decompai_ida.inferences import clear_inferences_marks_task
 from decompai_ida.monitor_analysis import monitor_analysis
 from decompai_ida.poll_server import poll_server_task
-from decompai_ida.state import State
+from decompai_ida.state import StateNodes
 from decompai_ida.track_changes import track_changes_task
-from decompai_ida.upload_revisions import upload_revisions_task
+from decompai_ida.upload_revisions import (
+    UploadRevisionsOptions,
+    upload_revisions_task,
+)
 
 _MAX_SUPPORTED_BINARY_SIZE_MB = 2
 _OBJECTS_PER_REVISION = 256
@@ -31,19 +42,21 @@ async def main(event_collector: ida_events.EventCollector):
             events = Broadcast[ida_events.Event](ida_events.EventRecorder())
             await event_collector.set_async_handler(events.post)
 
-            # Create API client early to detect configuration issues.
-            async with await api.get_api_client() as api_client:
-                await _watch_for_database(
-                    _GlobalEnv(
-                        events=events,
-                        api_client=api_client,
-                    )
+            # Read configuration early to detect issues.
+            plugin_config = await configuration.read_configuration()
+
+            await _watch_for_database(
+                _GlobalEnv(
+                    event_collector=event_collector,
+                    events=events,
+                    plugin_config=plugin_config,
                 )
+            )
 
     except exceptiongroup.ExceptionGroup as ex:
-        config_path = await api.get_config_path()
+        config_path = await configuration.get_config_path()
 
-        if ex.subgroup(api.BadConfigurationFile):
+        if ex.subgroup(configuration.BadConfigurationFile):
             await ida_tasks.run_ui(
                 ida_kernwin.warning,
                 f"Bad or missing DecompAI configuration at '{config_path}.'\n\n"
@@ -61,8 +74,9 @@ async def main(event_collector: ida_events.EventCollector):
 
 @dataclass(frozen=True)
 class _GlobalEnv:
+    event_collector: ida_events.EventCollector
     events: Broadcast[ida_events.Event]
-    api_client: ApiClient
+    plugin_config: configuration.PluginConfiguration
 
 
 async def _watch_for_database(global_env: _GlobalEnv):
@@ -86,6 +100,78 @@ async def _watch_for_database(global_env: _GlobalEnv):
 
 
 async def _database_flow(global_env: _GlobalEnv):
+    async with (
+        hook_hexrays(global_env.event_collector),
+        api.get_api_client(global_env.plugin_config) as api_client,
+        anyio.create_task_group() as tg,
+    ):
+        env = Env(
+            state_nodes=await ida_tasks.run(StateNodes),
+            binaries_api=BinariesApi(api_client),
+            events=global_env.events,
+            uploaded_revisions=Broadcast(RecordLatest()),
+            task_updates=Broadcast(),
+            status_summaries=Broadcast(RecordLatest()),
+            server_states=Broadcast(RecordLatest()),
+            check_addresses=Broadcast(),
+        )
+
+        with env.use():
+            should_work_on_db = await _should_work_on_db(
+                global_env.plugin_config
+            )
+
+            tg.start_soon(status.summarize_task_updates)
+            tg.start_soon(
+                status.report_status_summary_at_status_bar,
+                status.ReportStatusSummaryOptions(
+                    is_plugin_enabled=should_work_on_db
+                ),
+            )
+
+            if should_work_on_db:
+                is_unregistered = (await state.try_get_binary_id()) is None
+                if is_unregistered:
+                    await _register_binary()
+                    tg.start_soon(_upload_original_files)
+
+                tg.start_soon(
+                    upload_revisions_task,
+                    UploadRevisionsOptions(
+                        objects_per_revision=_OBJECTS_PER_REVISION,
+                        buffer_changes_period=_BUFFER_CHANGES_PERIOD,
+                    ),
+                )
+                tg.start_soon(clear_inferences_marks_task)
+                tg.start_soon(monitor_analysis)
+                tg.start_soon(poll_server_task)
+
+                await anyio.sleep(0.1)  # Let previous tasks start
+                tg.start_soon(track_changes_task)
+
+
+async def _should_work_on_db(
+    plugin_config: configuration.PluginConfiguration,
+) -> bool:
+    user_confirmation = await state.get_user_confirmation()
+
+    if user_confirmation is None and plugin_config.require_confirmation_per_db:
+        result = await ida_tasks.run_ui(
+            ida_kernwin.ask_buttons,
+            "Yes",
+            "Skip",
+            "Cancel",
+            ida_kernwin.ASKBTN_NO,
+            "HIDECANCEL\nWould you like DecompAI to run on this file?",
+        )
+        user_confirmation = result == ida_kernwin.ASKBTN_YES
+
+        await state.set_user_confirmation(user_confirmation)
+
+    # Note that user_confirmation can still be `None` for undecided here.
+    if user_confirmation == False:  # noqa: E712
+        return False
+
     if await binary.get_size() >= _MAX_SUPPORTED_BINARY_SIZE_MB * 2**20:
         await ida_tasks.run_ui(
             ida_kernwin.warning,
@@ -93,43 +179,28 @@ async def _database_flow(global_env: _GlobalEnv):
             f"{_MAX_SUPPORTED_BINARY_SIZE_MB}MB (full versions have no limit). "
             "As this database exceeds the limit, DecompAI has been disabled for this session.",
         )
-        return
+        return False
 
-    async with anyio.create_task_group() as tg:
-        env = Env(
-            state=await State.create(),
-            binaries_api=BinariesApi(global_env.api_client),
-            events=global_env.events,
-            revisions=Broadcast(),
-            uploaded_revisions=Broadcast(RecordLatest()),
-            task_updates=Broadcast(),
-            status_summaries=Broadcast(RecordLatest()),
-            server_states=Broadcast(RecordLatest()),
-            initial_analysis_complete=anyio.Event(),
-        )
+    return True
 
-        with env.use():
-            tg.start_soon(status.summarize_task_updates)
-            tg.start_soon(status.report_status_summary_at_status_bar)
 
-            is_unregistered = (await env.state.try_get_binary_id()) is None
-            if is_unregistered:
-                await _register_binary()
-                tg.start_soon(_upload_original_files)
-
-            tg.start_soon(monitor_analysis)
-            tg.start_soon(upload_revisions_task)
-            tg.start_soon(poll_server_task)
-            tg.start_soon(track_changes_task, _BUFFER_CHANGES_PERIOD)
-
-            await _wait_for_auto_analysis()
-            tg.start_soon(perform_initial_analysis, _OBJECTS_PER_REVISION)
+@asynccontextmanager
+async def hook_hexrays(event_collector: ida_events.EventCollector):
+    """
+    Hook HexRays. Note that doing this in plugin entry causes crashes.
+    """
+    hexrays_hooks = ida_events.HexRaysHooks(event_collector)
+    await ida_tasks.run_ui(hexrays_hooks.hook)
+    try:
+        yield
+    finally:
+        await ida_tasks.run_ui(hexrays_hooks.unhook)
 
 
 async def _register_binary():
     env = Env.get()
 
-    existing_binary_id = await env.state.try_get_binary_id()
+    existing_binary_id = await state.try_get_binary_id()
     assert existing_binary_id is None
 
     binary_path = await binary.get_binary_path()
@@ -140,25 +211,12 @@ async def _register_binary():
             lambda: env.binaries_api.create_binary(post_body), task=task
         )
 
-    await env.state.set_binary_id(result.binary_id)
-
-
-async def _wait_for_auto_analysis():
-    async with (
-        Env.get().events.subscribe() as event_receiver,
-        status.begin_task("waiting_for_ida"),
-    ):
-        while not await ida_tasks.run_read(ida_auto.auto_is_ok):
-            with anyio.move_on_after(1):
-                await wait_for_object_of_type(
-                    event_receiver,
-                    ida_events.InitialAutoAnalysisComplete,
-                )
+    await state.set_binary_id(result.binary_id)
 
 
 async def _upload_original_files():
     env = Env.get()
-    binary_id = await env.state.get_binary_id()
+    binary_id = await state.get_binary_id()
 
     try:
         input_file = await binary.read_compressed_input_file()

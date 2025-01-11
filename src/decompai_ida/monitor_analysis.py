@@ -1,7 +1,7 @@
 import typing_extensions as tye
 from aiostream import stream
 
-from decompai_ida import status
+from decompai_ida import state, status
 from decompai_ida.env import Env
 from decompai_ida.poll_server import ServerStateChanged
 from decompai_ida.upload_revisions import RevisionUploaded
@@ -13,7 +13,7 @@ async def monitor_analysis():
     # Revision on which current progress started showing.
     base_revision = None
     # Revision on which current analysis is expected to end.
-    target_revision = await Env.get().state.get_current_revision()
+    target_revision = await state.get_current_revision()
     # Current server fractional revision (done plus progress on current).
     server_progress = 0.0
 

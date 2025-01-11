@@ -30,17 +30,30 @@ async def status_bar_widget_updater():
 
     global _current_widget
 
-    @ida_tasks.ui
-    def setup():
+    def setup_sync():
         status_bar = _find_status_bar_sync()
         widget = _StatusBarWidget()
         status_bar.addPermanentWidget(widget)
         return status_bar, widget
 
-    status_bar, widget = await setup()
+    status_bar, widget = await ida_tasks.run_ui(setup_sync)
+
+    async def update_contents(
+        *,
+        text: str,
+        progress: ty.Union[ty.Literal["started"], ty.Optional[int]] = None,
+        warning: ty.Optional[str] = None,
+    ):
+        await ida_tasks.run_ui(
+            widget.update_contents,
+            text=text,
+            progress=progress,
+            warning=warning,
+        )
+
     try:
         _current_widget = widget
-        yield ida_tasks.ui(widget.update_contents)
+        yield update_contents
     finally:
         _current_widget = None
         with anyio.CancelScope(shield=True):

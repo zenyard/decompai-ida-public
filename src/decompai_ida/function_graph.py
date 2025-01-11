@@ -2,7 +2,6 @@ import graphlib
 import typing as ty
 
 import ida_funcs
-import ida_segment
 import idautils
 import typing_extensions as tye
 from anyio import from_thread, to_thread
@@ -12,77 +11,34 @@ from decompai_ida import ida_tasks
 
 _AddressGraph: tye.TypeAlias = ty.Mapping[int, ty.Collection[int]]
 
-_IGNORED_SEGMENTS = {
-    "extern",
-    ".plt",
-    ".plt.got",
-    ".got",
-    # TODO: PE, Mach-O segments?
-}
+
+async def get_funcs_in_approx_topo_order(
+    func_addresses: ty.Iterable[int],
+) -> ty.Sequence[int]:
+    """
+    Returns given functions in approximate topological order.
+
+    Each given address must be that starting address of a function.
+    """
+
+    func_to_calls = {func_address: set() for func_address in func_addresses}
+
+    async for caller, callee in _read_calls(func_to_calls):
+        if caller in func_to_calls:
+            func_to_calls[caller].add(callee)
+
+    return await _approx_topo_order(func_to_calls)
 
 
-class FunctionGraph:
-    _approx_topo_order: ty.Sequence[int]
-
-    def __init__(
-        self,
-        *,
-        approx_topo_order: ty.Sequence[int],
-    ):
-        self._approx_topo_order = approx_topo_order
-
-    def __len__(self) -> int:
-        return len(self._approx_topo_order)
-
-    def approx_topo_order(self) -> ty.Iterator[int]:
-        """
-        Return list of functions in approximate topological order, with nodes of
-        call graph appearing before their parents, as long as its acyclic.
-        """
-        return iter(self._approx_topo_order)
-
-    @staticmethod
-    async def build_from_ida() -> "FunctionGraph":
-        func_to_callers = dict[int, set[int]]()
-
-        async for func, caller in _read_funcs_to_callers():
-            if caller is None:
-                func_to_callers[func] = set()
-            else:
-                func_to_callers[func].add(caller)
-
-        func_to_calls = {func: set() for func in func_to_callers}
-        for func, callers in func_to_callers.items():
-            for caller in callers:
-                if caller in func_to_callers:
-                    func_to_calls[caller].add(func)
-
-        approx_topo_order = await _approx_topo_order(func_to_calls)
-
-        return FunctionGraph(
-            approx_topo_order=approx_topo_order,
-        )
-
-
-@ida_tasks.read_generator
-def _read_funcs_to_callers() -> ty.Iterator[tuple[int, ty.Optional[int]]]:
-    for segment_base in idautils.Segments():
-        segment = ida_segment.getseg(segment_base)
-
-        if ida_segment.get_segm_class(segment) != "CODE":
-            continue
-
-        if ida_segment.get_segm_name(segment) in _IGNORED_SEGMENTS:
-            continue
-
-        segment_end = segment_base + segment.size()  # type: ignore
-
-        for func in idautils.Functions(segment_base, segment_end):
-            yield (func, None)
-            for code_ref in idautils.CodeRefsTo(func, flow=False):
-                from_func = ida_funcs.get_func(code_ref)
-                if from_func is not None:
-                    yield (func, from_func.start_ea)
+@ida_tasks.wrap_generator
+def _read_calls(
+    target_addresses: ty.Iterable[int],
+) -> ty.Iterator[tuple[int, int]]:
+    for target_address in target_addresses:
+        for code_ref in idautils.CodeRefsTo(target_address, flow=False):
+            from_func = ida_funcs.get_func(code_ref)
+            if from_func is not None:
+                yield (from_func.start_ea, target_address)
 
 
 async def _approx_topo_order(graph: _AddressGraph) -> ty.Sequence[int]:

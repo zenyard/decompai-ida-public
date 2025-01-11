@@ -14,7 +14,7 @@ from anyio import to_thread
 from decompai_ida import ida_tasks
 
 
-@ida_tasks.read
+@ida_tasks.wrap
 def get_size() -> int:
     """
     Gets approximate size of the input binary, by summing sizes of segments
@@ -35,12 +35,12 @@ def get_size() -> int:
     )
 
 
-@ida_tasks.read
+@ida_tasks.wrap
 def get_binary_path() -> anyio.Path:
     return anyio.Path(ida_nalt.get_input_file_path())
 
 
-@ida_tasks.read
+@ida_tasks.wrap
 def get_idb_path() -> anyio.Path:
     return anyio.Path(ida_loader.get_path(ida_loader.PATH_TYPE_IDB))
 

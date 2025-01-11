@@ -55,8 +55,9 @@ _TASK_KIND_LABEL: ty.Mapping[TaskKind, str] = {
     "registering": "Registering at server",
 }
 
-# Text to show when no task is active.
+# Texts to show when no task is active.
 _IDLE_LABEL = "Ready"
+_DISABLED_LABEL = "Not running"
 
 # Text to show on warning tooltip
 _WARNING_LABEL = "Can't reach server"
@@ -64,6 +65,8 @@ _WARNING_LABEL = "Can't reach server"
 # Time, in seconds, between warning being set until it is actually reported to
 # user.
 _WARNING_GRACE_PERIOD = 60
+
+_T = ty.TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -166,6 +169,14 @@ class Task:
         self._warning_start_time = None
         await self._send_update()
 
+    async def report_iter_progress(
+        self, collection: ty.Collection[_T]
+    ) -> ty.AsyncIterator[_T]:
+        await self.set_item_count(len(collection))
+        for item in collection:
+            yield item
+            await self.mark_item_complete()
+
     async def _send_update(self):
         warning = self._warning_start_time is not None and (
             _get_monotonic_time() - self._warning_start_time
@@ -231,7 +242,16 @@ async def summarize_task_updates():
                 last_status_summary = status_summary
 
 
-async def report_status_summary_at_status_bar():
+@dataclass(frozen=True)
+class ReportStatusSummaryOptions:
+    is_plugin_enabled: bool
+
+
+async def report_status_summary_at_status_bar(
+    options: ReportStatusSummaryOptions,
+):
+    idle_text = _IDLE_LABEL if options.is_plugin_enabled else _DISABLED_LABEL
+
     # This requires PyQt5.
     try:
         from decompai_ida.status_bar_widget import status_bar_widget_updater
@@ -249,6 +269,8 @@ async def report_status_summary_at_status_bar():
         env.status_summaries.subscribe() as status_summary_receiver,
         status_bar_widget_updater() as update_status_bar,
     ):
+        await update_status_bar(text=idle_text, progress=None, warning=None)
+
         async for status_summary in status_summary_receiver:
             # In case of idle, wait a bit to allow for another task to begin
             # before updating UI, to avoid quick updates in this common case.
@@ -261,7 +283,7 @@ async def report_status_summary_at_status_bar():
                 progress = status_summary.progress
                 warning = _WARNING_LABEL if status_summary.warning else None
             else:
-                text = _IDLE_LABEL
+                text = idle_text
                 progress = None
                 warning = None
 

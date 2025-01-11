@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import anyio
 
 from decompai_client import BinaryAnalysisIdle, BinaryAnalysisInProgress
-from decompai_ida import api, inferences, status
+from decompai_ida import api, inferences, state, status
 from decompai_ida.env import Env
 
 _POLL_INTERVAL = 1
@@ -48,9 +48,9 @@ async def _poll_server():
 
 async def _poll_server_once() -> ty.Literal["stop", "continue_polling"]:
     env = Env.get()
-    binary_id = await env.state.get_binary_id()
+    binary_id = await state.get_binary_id()
 
-    revision = await env.state.get_current_revision()
+    revision = await state.get_current_revision()
     response = await env.binaries_api.get_status(binary_id=binary_id)
     status = response.actual_instance
 
@@ -74,9 +74,9 @@ async def _poll_server_once() -> ty.Literal["stop", "continue_polling"]:
 
 async def _fetch_and_apply_inferences():
     env = Env.get()
-    binary_id = await env.state.get_binary_id()
-    cursor = await env.state.get_revision_cursor()
-    current_revision = await env.state.get_current_revision()
+    binary_id = await state.get_binary_id()
+    cursor = await state.get_revision_cursor()
+    current_revision = await state.get_current_revision()
 
     while True:
         if current_revision is None:
@@ -92,7 +92,7 @@ async def _fetch_and_apply_inferences():
             await inferences.apply_inferences(result.inferences)
 
         cursor = result.cursor
-        await env.state.set_revision_cursor(cursor)
+        await state.set_revision_cursor(cursor)
 
         if not result.has_next:
             break

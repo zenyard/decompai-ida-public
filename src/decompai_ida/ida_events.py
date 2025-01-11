@@ -8,6 +8,7 @@ import threading
 import typing as ty
 from dataclasses import dataclass
 
+import ida_hexrays
 import ida_idp
 import ida_kernwin
 import typing_extensions as tye
@@ -32,11 +33,14 @@ class MainUiReady:
 
 
 @dataclass(frozen=True)
-class AddressRenamed:
+class AddressModified:
+    """
+    Address was modified in some way (comment, name, type, etc.)
+
+    This doesn't cover removal events (e.g. function removal).
+    """
+
     address: int
-    old_name: str
-    new_name: str
-    is_local: bool
 
 
 @dataclass(frozen=True)
@@ -48,7 +52,7 @@ Event: tye.TypeAlias = ty.Union[
     DatabaseOpened,
     DatabaseClosed,
     MainUiReady,
-    AddressRenamed,
+    AddressModified,
     InitialAutoAnalysisComplete,
 ]
 
@@ -102,40 +106,121 @@ class EventCollector:
                 await handler(event)
 
 
-class UiEventHooks(ida_kernwin.UI_Hooks):
+class _BaseHooks:
     def __init__(self, collector: EventCollector):
         super().__init__()
         self._collector = collector
 
-    def database_inited(self, is_new_database: "int", idc_script: str, /):
+    def _report_address_modified(self, address: int):
+        assert isinstance(address, int), f"Got: {address}"
+        self._collector.add(AddressModified(address=address))
+
+
+class UiEventHooks(_BaseHooks, ida_kernwin.UI_Hooks):
+    def database_inited(self, is_new_database, idc_script, /):
         self._collector.add(DatabaseOpened())
+        return super().database_inited(is_new_database, idc_script)
 
     def database_closed(self, /):
         self._collector.add(DatabaseClosed())
+        return super().database_closed()
 
     def ready_to_run(self, /):
         self._collector.add(MainUiReady())
+        return super().ready_to_run()
 
 
-class DbEventHooks(ida_idp.IDB_Hooks):
-    def __init__(self, collector: EventCollector):
-        super().__init__()
-        self._collector = collector
-
+class DbEventHooks(_BaseHooks, ida_idp.IDB_Hooks):
     def auto_empty_finally(self, /):
         self._collector.add(InitialAutoAnalysisComplete())
+        return super().auto_empty_finally()
 
-    def renamed(
-        self, ea: int, new_name: str, local_name: bool, old_name: str, /
-    ):
-        self._collector.add(
-            AddressRenamed(
-                address=ea,
-                old_name=old_name,
-                new_name=new_name,
-                is_local=local_name,
-            )
-        )
+    # Note - func_update not handled, it creates a lot of false-positive
+    # updates, while other events cover the cases we care about.
+
+    # TODO
+    # def func_deleted(self, func_ea, /):
+    # def local_types_changed(self, ltc, ordinal, name, /):
+
+    def func_added(self, pfn, /):
+        self._report_address_modified(pfn.start_ea)
+        return super().func_added(pfn)
+
+    def func_tail_appended(self, pfn, tail, /):
+        self._report_address_modified(pfn.start_ea)
+        return super().func_tail_appended(pfn, tail)
+
+    def func_tail_deleted(self, pfn, tail_ea, /):
+        self._report_address_modified(pfn.start_ea)
+        return super().func_tail_deleted(pfn, tail_ea)
+
+    def tail_owner_changed(self, tail, owner_func, old_owner, /):
+        self._report_address_modified(owner_func)
+        self._report_address_modified(old_owner)
+        return super().tail_owner_changed(tail, owner_func, old_owner)
+
+    def func_noret_changed(self, pfn, /):
+        self._report_address_modified(pfn.start_ea)
+        return super().func_noret_changed(pfn)
+
+    def thunk_func_created(self, pfn, /):
+        self._report_address_modified(pfn.start_ea)
+        return super().thunk_func_created(pfn)
+
+    def callee_addr_changed(self, ea, callee, /):
+        self._report_address_modified(ea)
+        return super().callee_addr_changed(ea, callee)
+
+    def ti_changed(self, ea, type, fnames, /):
+        self._report_address_modified(ea)
+        return super().ti_changed(ea, type, fnames)
+
+    def op_ti_changed(self, ea, n, type, fnames, /):
+        self._report_address_modified(ea)
+        return super().op_ti_changed(ea, n, type, fnames)
+
+    def op_type_changed(self, ea, n, /):
+        self._report_address_modified(ea)
+        return super().op_type_changed(ea, n)
+
+    def renamed(self, ea, new_name, local_name, old_name, /):
+        self._report_address_modified(ea)
+        return super().renamed(ea, new_name, local_name, old_name)
+
+    def cmt_changed(self, ea, repeatable_cmt, /):
+        self._report_address_modified(ea)
+        return super().cmt_changed(ea, repeatable_cmt)
+
+    def extra_cmt_changed(self, ea, line_idx, cmt, /):
+        self._report_address_modified(ea)
+        return super().extra_cmt_changed(ea, line_idx, cmt)
+
+    def range_cmt_changed(self, kind, a, cmt, repeatable, /):
+        self._report_address_modified(a.start_ea)
+        return super().range_cmt_changed(kind, a, cmt, repeatable)
+
+
+class HexRaysHooks(_BaseHooks, ida_hexrays.Hexrays_Hooks):
+    def cmt_changed(self, cfunc, loc, cmt, /) -> "int":
+        self._report_address_modified(cfunc.entry_ea)
+        return super().cmt_changed(cfunc, loc, cmt)
+
+    def lvar_cmt_changed(self, vu, v, cmt, /) -> "int":
+        self._report_address_modified(v.defea)
+        return super().lvar_cmt_changed(vu, v, cmt)
+
+    def lvar_mapping_changed(self, vu, frm, to, /) -> "int":
+        self._report_address_modified(frm.defea)
+        self._report_address_modified(to.defea)
+        return super().lvar_mapping_changed(vu, frm, to)
+
+    def lvar_name_changed(self, vu, v, name, is_user_name, /) -> "int":
+        self._report_address_modified(v.defea)
+        return super().lvar_name_changed(vu, v, name, is_user_name)
+
+    def lvar_type_changed(self, vu, v, tinfo, /) -> "int":
+        self._report_address_modified(v.defea)
+        return super().lvar_type_changed(vu, v, tinfo)
 
 
 class EventRecorder(Recorder):

@@ -106,7 +106,9 @@ class Broadcast(AsyncResource, ty.Generic[_T]):
                 self._subscribers -= to_remove
 
     def subscribe(
-        self, buffer_size=128, replay_recorded: bool = True
+        self,
+        buffer_size: float = 128,
+        replay_recorded: bool = True,
     ) -> ObjectReceiveStream[_T]:
         """
         Start receiving broadcasts to a new receiver channel.

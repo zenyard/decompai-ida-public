@@ -9,7 +9,7 @@ from decompai_ida.main import main
 
 
 class StopSignal:
-    callback: ty.Optional[ida_tasks.AsyncCallback[[]]] = None
+    callback: ty.Optional[ida_tasks.AsyncCallback] = None
 
 
 class DecompaiPlugin(ida_idaapi.plugin_t):

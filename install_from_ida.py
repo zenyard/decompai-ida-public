@@ -10,7 +10,7 @@ import typing as ty
 from pathlib import Path
 from textwrap import indent
 from urllib.request import urlopen
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import ida_diskio
 import ida_kernwin
@@ -118,9 +118,22 @@ def get_hidden_window_startupinfo():
 
 
 def install_or_upgrade_package(source: str, *, target: Path):
-    # Try again as user
+    temp_root = target.with_suffix(".temp")
+
+    # Clear files from previous installation
+    if temp_root.exists():
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+    # We download to another destination, since pip may not be able to replace
+    # shared libs currently loaded to IDA.
+    work_dir = temp_root / str(uuid4())
+    work_dir.mkdir(parents=True)
+    download_path = work_dir / "download"
+
     try:
-        run_pip(("install", "--upgrade", "--target", str(target), source))
+        run_pip(
+            ("install", "--upgrade", "--target", str(download_path), source)
+        )
     except subprocess.CalledProcessError as ex:
         all_output = indent(
             "\n".join((ex.stdout, ex.stderr)).strip(),
@@ -129,6 +142,12 @@ def install_or_upgrade_package(source: str, *, target: Path):
         )
         print(all_output)
         raise
+
+    if target.exists():
+        target.rename(work_dir / "old")
+    download_path.rename(target)
+
+    shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def run_pip(args: ty.Iterable[str]):

@@ -254,7 +254,10 @@ async def report_status_summary_at_status_bar(
 
     # This requires PyQt5.
     try:
-        from decompai_ida.status_bar_widget import status_bar_widget_updater
+        from decompai_ida.status_bar_widget import (
+            StatusBarWidgetState,
+            status_bar_widget,
+        )
     except ImportError:
         return
 
@@ -267,16 +270,25 @@ async def report_status_summary_at_status_bar(
     # Pump status summaries to status bar widget.
     async with (
         env.status_summaries.subscribe() as status_summary_receiver,
-        status_bar_widget_updater() as update_status_bar,
+        status_bar_widget() as widget,
     ):
-        await update_status_bar(text=idle_text, progress=None, warning=None)
+        await widget.set_state(
+            StatusBarWidgetState(
+                text=idle_text, enabled=options.is_plugin_enabled
+            )
+        )
+
+        previous_summary_kind: ty.Optional[TaskKind] = None
 
         async for status_summary in status_summary_receiver:
-            # In case of idle, wait a bit to allow for another task to begin
-            # before updating UI, to avoid quick updates in this common case.
-            if status_summary is None:
-                with anyio.move_on_after(0.25):
+            # Avoid quickly changing summary kind when tasks start and complete
+            # quickly, to avoid flickering UI.
+            with anyio.move_on_after(0.2):
+                while (
+                    _get_summary_kind(status_summary) != previous_summary_kind
+                ):
                     status_summary = await status_summary_receiver.receive()
+            previous_summary_kind = _get_summary_kind(status_summary)
 
             if status_summary is not None:
                 text = _TASK_KIND_LABEL[status_summary.task_kind]
@@ -287,8 +299,13 @@ async def report_status_summary_at_status_bar(
                 progress = None
                 warning = None
 
-            await update_status_bar(
-                text=text, progress=progress, warning=warning
+            await widget.set_state(
+                StatusBarWidgetState(
+                    text=text,
+                    progress=progress,
+                    warning=warning,
+                    enabled=options.is_plugin_enabled,
+                )
             )
 
 
@@ -330,6 +347,12 @@ class StatusSummary:
             progress=highest_priority.progress,
             warning=any_warning,
         )
+
+
+def _get_summary_kind(
+    summary: ty.Optional[StatusSummary],
+) -> ty.Optional[TaskKind]:
+    return summary.task_kind if summary is not None else None
 
 
 # Patched in tests

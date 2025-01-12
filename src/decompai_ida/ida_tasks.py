@@ -88,7 +88,7 @@ async def run_ui(
 
 
 async def wrap_iter(
-    iter: ty.Iterator[_R], *, max_items=4096, max_time=0.2
+    iter: ty.Iterator[_R], *, max_items=4096, max_time=0.1
 ) -> ty.AsyncIterator[_R]:
     def read_chunk():
         chunk = list[_R]()
@@ -147,6 +147,7 @@ async def _run_in_main(
 ) -> _R:
     output: ty.Union[_Success, _Failure, _Missing] = _Missing()
     done = anyio.Event()
+    set_done = AsyncCallback(done.set)
     cancelled = False
     context = contextvars.copy_context()
 
@@ -163,7 +164,7 @@ async def _run_in_main(
         except Exception as ex:
             output = _Failure(ex)
         finally:
-            done.set()
+            set_done()
 
     _execute_sync(perform, flags | ida_kernwin.MFF_NOWAIT)
     try:
@@ -199,22 +200,19 @@ class AsyncCallback(ty.Generic[_P]):
 
     _loop: asyncio.AbstractEventLoop
     _context: contextvars.Context
-    _callback: ty.Callable[_P, ty.Awaitable[None]]
+    _callback: ty.Callable[_P, ty.Union[ty.Awaitable[None], None]]
 
-    def __init__(self, callback: ty.Callable[_P, ty.Awaitable[None]]):
+    def __init__(
+        self, callback: ty.Callable[_P, ty.Union[ty.Awaitable[None], None]]
+    ):
         self._loop = asyncio.get_running_loop()
         self._context = contextvars.copy_context()
         self._callback = callback
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
         async def run():
-            await self._context.run(self._callback, *args, **kwargs)
+            result = self._context.run(self._callback, *args, **kwargs)
+            if result is not None:
+                await result
 
         asyncio.run_coroutine_threadsafe(run(), loop=self._loop)
-
-
-def _get_flags(*, database_access: bool):
-    # We never request MFF_READ, as it proves hard to tell which API only reads
-    # the DB (e.g. `ida_hexrays.decompile` writes), and getting this wrong may
-    # lead to errors and crashes.
-    return ida_kernwin.MFF_WRITE if database_access else ida_kernwin.MFF_FAST

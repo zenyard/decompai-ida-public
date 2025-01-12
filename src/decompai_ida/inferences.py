@@ -1,8 +1,11 @@
 import typing as ty
+from collections import defaultdict
 from contextlib import contextmanager
 
 import exceptiongroup
 import ida_funcs
+import ida_hexrays
+import ida_kernwin
 import ida_name
 import idc
 import typing_extensions as tye
@@ -26,24 +29,50 @@ _INFERRED_COLOR = _rgb_to_int(220, 202, 255)
 
 @ida_tasks.wrap
 def apply_inferences(inferences: ty.Iterable[Inference]):
+    by_address = defaultdict[int, list[Inference]](list)
     for inference in inferences:
-        try:
-            inference = _apply_local_transformations(inference)
-            if inference.actual_instance is None:
-                return
-            address = api.parse_address(inference.actual_instance.address)
-            state.add_inference_for_address.sync(address, inference)
+        if inference.actual_instance is not None:
+            by_address[
+                api.parse_address(inference.actual_instance.address)
+            ].append(inference)
 
-            with _maintain_uploaded_hash_sync(address):
-                if isinstance(inference.actual_instance, FunctionOverview):
-                    _apply_overview_sync(inference.actual_instance)
-                elif isinstance(inference.actual_instance, Name):
-                    _apply_name_sync(inference.actual_instance)
-                else:
-                    _: tye.Never = inference.actual_instance
+    for address, inferences in by_address.items():
+        with _maintain_uploaded_hash_sync(address):
+            for inference in inferences:
+                try:
+                    inference = _apply_local_transformations(inference)
+                    assert inference.actual_instance is not None
+                    state.add_inference_for_address.sync(address, inference)
 
-        except Exception as ex:
-            exceptiongroup.print_exception(ex)
+                    if isinstance(inference.actual_instance, FunctionOverview):
+                        _apply_overview_sync(inference.actual_instance)
+                    elif isinstance(inference.actual_instance, Name):
+                        _apply_name_sync(inference.actual_instance)
+                    else:
+                        _: tye.Never = inference.actual_instance
+
+                except Exception as ex:
+                    exceptiongroup.print_exception(ex)
+
+        _update_pseudocode_viewer_for_address_sync(address)
+
+
+def _update_pseudocode_viewer_for_address_sync(address: int):
+    current_vdui = ida_hexrays.get_widget_vdui(ida_kernwin.get_current_viewer())
+
+    if current_vdui is None:
+        return
+
+    if not current_vdui.visible():
+        return
+
+    if current_vdui.cfunc is None:
+        return
+
+    if current_vdui.cfunc.entry_ea != address:
+        return
+
+    current_vdui.refresh_view(True)
 
 
 async def clear_inferences_marks_task(
@@ -63,7 +92,7 @@ def _clear_inferred_name_marks_sync(address: int):
     if func is None or address != func.start_ea:
         return
 
-    if idc.get_color(address, idc.CIC_FUNC) == _INFERRED_COLOR:
+    if idc.get_color(address, idc.CIC_FUNC) != _INFERRED_COLOR:
         return
 
     if not has_user_defined_name.sync(address):

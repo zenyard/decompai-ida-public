@@ -1,6 +1,7 @@
 import importlib.resources
 import typing as ty
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import anyio
 import typing_extensions as tye
@@ -8,6 +9,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QGraphicsColorizeEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -22,10 +24,19 @@ _current_widget: ty.Optional["_StatusBarWidget"] = None
 "Current widget in status bar, only present to allow interactive access"
 
 
+@dataclass(frozen=True)
+class StatusBarWidgetState:
+    text: str
+    progress: ty.Union[ty.Literal["started"], ty.Optional[int]] = None
+    warning: ty.Optional[str] = None
+    enabled: bool = True
+
+
 @asynccontextmanager
-async def status_bar_widget_updater():
+async def status_bar_widget() -> ty.AsyncIterator["StatusBarWidgetProxy"]:
     """
-    Context manager adding widget to status bar, returns update function.
+    Context manager adding widget to status bar, yielding an object to update
+    it from async code.
     """
 
     global _current_widget
@@ -38,26 +49,21 @@ async def status_bar_widget_updater():
 
     status_bar, widget = await ida_tasks.run_ui(setup_sync)
 
-    async def update_contents(
-        *,
-        text: str,
-        progress: ty.Union[ty.Literal["started"], ty.Optional[int]] = None,
-        warning: ty.Optional[str] = None,
-    ):
-        await ida_tasks.run_ui(
-            widget.update_contents,
-            text=text,
-            progress=progress,
-            warning=warning,
-        )
-
     try:
         _current_widget = widget
-        yield update_contents
+        yield StatusBarWidgetProxy(widget)
     finally:
         _current_widget = None
         with anyio.CancelScope(shield=True):
             await ida_tasks.run_ui(status_bar.removeWidget, widget)
+
+
+class StatusBarWidgetProxy:
+    def __init__(self, widget: "_StatusBarWidget"):
+        self._widget = widget
+
+    async def set_state(self, state: StatusBarWidgetState):
+        await ida_tasks.run_ui(self._widget.set_state, state)
 
 
 class _StatusBarWidget(QWidget):
@@ -73,11 +79,14 @@ class _StatusBarWidget(QWidget):
         self._hbox.setSpacing(4)
 
         # Zenyard icon
+        self._grey_icon_effect = QGraphicsColorizeEffect()
+        self._grey_icon_effect.setColor(Qt.gray)
         self._icon = QLabel()
         self._hbox.addWidget(self._icon)
         self._icon.setPixmap(_load_icon("zenyard_icon.png"))
         self._icon.setFixedSize(18, 18)
         self._icon.setScaledContents(True)
+        self._icon.setGraphicsEffect(self._grey_icon_effect)
 
         # Warning icon
         self._warning_icon = QLabel()
@@ -98,35 +107,34 @@ class _StatusBarWidget(QWidget):
         self._hbox.addWidget(self._progress_bar)
         self._progress_bar.setFixedSize(100, 18)
 
-        self.update_contents(text="")
+        self.set_state(StatusBarWidgetState(text=""))
 
-    def update_contents(
-        self,
-        *,
-        text: str,
-        progress: ty.Union[ty.Literal["started"], ty.Optional[int]] = None,
-        warning: ty.Optional[str] = None,
-    ):
-        self._label.setText(text)
+    def set_state(self, state: StatusBarWidgetState):
+        self._label.setText(state.text)
 
-        if warning is not None:
+        if state.enabled:
+            self._grey_icon_effect.setStrength(0.0)
+        else:
+            self._grey_icon_effect.setStrength(0.7)
+
+        if state.warning is not None:
             self._warning_icon.setVisible(True)
-            self._warning_icon.setToolTip(warning)
+            self._warning_icon.setToolTip(state.warning)
         else:
             self._warning_icon.setVisible(False)
 
-        if progress == "started":
+        if state.progress == "started":
             self._progress_bar.setVisible(True)
             self._progress_bar.setRange(0, 0)
             self._progress_bar.setValue(0)
-        elif isinstance(progress, int):
+        elif isinstance(state.progress, int):
             self._progress_bar.setVisible(True)
             self._progress_bar.setRange(0, 100)
-            self._progress_bar.setValue(progress)
-        elif progress is None:
+            self._progress_bar.setValue(state.progress)
+        elif state.progress is None:
             self._progress_bar.setVisible(False)
         else:
-            _: tye.Never = progress
+            _: tye.Never = state.progress
 
 
 def _load_icon(file_name: str) -> QPixmap:

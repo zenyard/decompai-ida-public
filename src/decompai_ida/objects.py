@@ -1,7 +1,7 @@
-from dataclasses import dataclass
 import hashlib
 import json
 import typing as ty
+from dataclasses import dataclass
 from itertools import groupby
 
 import ida_funcs
@@ -102,7 +102,14 @@ def read_object(address: int) -> ReadObject:
             calls=_get_calls_sync(address),
             has_known_name=has_known_name,
         )
-        hashed_obj = obj.copy(update={"code": reducted_code})
+
+        hashed_obj = Function(
+            address=obj.address,
+            name=obj.name,
+            code=reducted_code,
+            calls=obj.calls,
+            has_known_name=obj.has_known_name,
+        )
 
     return ReadObject(object=obj, hash=_hash_object(hashed_obj))
 

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from inspect import cleandoc
 
 import anyio
 import exceptiongroup
@@ -10,11 +11,11 @@ from decompai_client.exceptions import ForbiddenException, UnauthorizedException
 from decompai_ida import (
     api,
     binary,
+    configuration,
     ida_events,
     ida_tasks,
     state,
     status,
-    configuration,
 )
 from decompai_ida.async_utils import wait_for_object_of_type
 from decompai_ida.broadcast import Broadcast, RecordLatest
@@ -157,12 +158,15 @@ async def _should_work_on_db(
 
     if user_confirmation is None and plugin_config.require_confirmation_per_db:
         result = await ida_tasks.run_ui(
-            ida_kernwin.ask_buttons,
-            "Yes",
-            "Skip",
-            "Cancel",
-            ida_kernwin.ASKBTN_NO,
-            "HIDECANCEL\nWould you like DecompAI to run on this file?",
+            ida_kernwin.ask_form,
+            cleandoc("""
+                BUTTON YES ~Y~es
+                BUTTON CANCEL* ~S~kip
+                Run DecompAI?
+
+
+                Would you like DecompAI to run on this file?
+            """),
         )
         user_confirmation = result == ida_kernwin.ASKBTN_YES
 

@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, StrictBool
+from typing import Any, ClassVar, Dict, List, Optional
 from decompai_client.models.object import Object
 from typing import Optional, Set
 from typing_extensions import Self
@@ -28,7 +28,8 @@ class PutRevisionBody(BaseModel):
     PutRevisionBody
     """ # noqa: E501
     objects: List[Object]
-    __properties: ClassVar[List[str]] = ["objects"]
+    analyze_dependents: Optional[StrictBool] = True
+    __properties: ClassVar[List[str]] = ["objects", "analyze_dependents"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -88,7 +89,8 @@ class PutRevisionBody(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "objects": [Object.from_dict(_item) for _item in obj["objects"]] if obj.get("objects") is not None else None
+            "objects": [Object.from_dict(_item) for _item in obj["objects"]] if obj.get("objects") is not None else None,
+            "analyze_dependents": obj.get("analyze_dependents") if obj.get("analyze_dependents") is not None else True
         })
         return _obj
 

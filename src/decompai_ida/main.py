@@ -1,4 +1,3 @@
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from inspect import cleandoc
 
@@ -14,6 +13,7 @@ from decompai_ida import (
     configuration,
     ida_events,
     ida_tasks,
+    logger,
     state,
     status,
 )
@@ -22,7 +22,8 @@ from decompai_ida.broadcast import Broadcast, RecordLatest
 from decompai_ida.env import Env
 from decompai_ida.inferences import clear_inferences_marks_task
 from decompai_ida.monitor_analysis import monitor_analysis
-from decompai_ida.poll_server import poll_server_task
+from decompai_ida.poll_server_status import poll_server_status_task
+from decompai_ida.poll_inferences import poll_inferences_task
 from decompai_ida.state import StateNodes
 from decompai_ida.track_changes import track_changes_task
 from decompai_ida.upload_revisions import (
@@ -30,9 +31,14 @@ from decompai_ida.upload_revisions import (
     upload_revisions_task,
 )
 
-_MAX_SUPPORTED_BINARY_SIZE_MB = 2
-_OBJECTS_PER_REVISION = 256
-_BUFFER_CHANGES_PERIOD = 1
+_MAX_SUPPORTED_BINARY_SIZE_MB = 10
+
+_UPLOAD_OPTIONS = UploadRevisionsOptions(
+    max_objects_per_revision=256,
+    max_revision_bytes=3 * 1024 * 1024,
+    max_pending_revisions=8,
+    buffer_changes_period=1,
+)
 
 
 async def main(event_collector: ida_events.EventCollector):
@@ -101,11 +107,18 @@ async def _watch_for_database(global_env: _GlobalEnv):
 
 
 async def _database_flow(global_env: _GlobalEnv):
+    idb_path = await binary.get_idb_path()
+    log_path = idb_path.with_suffix(".log")
+
     async with (
-        hook_hexrays(global_env.event_collector),
+        logger.open(log_path, global_env.plugin_config.log_level),
+        # Note that hooking Hexrays_Hooks in plugin entry crashes.
+        ida_tasks.hook(ida_events.HexRaysHooks(global_env.event_collector)),
         api.get_api_client(global_env.plugin_config) as api_client,
         anyio.create_task_group() as tg,
     ):
+        await logger.get().ainfo("Starting")
+
         env = Env(
             state_nodes=await ida_tasks.run(StateNodes),
             binaries_api=BinariesApi(api_client),
@@ -116,6 +129,10 @@ async def _database_flow(global_env: _GlobalEnv):
             server_states=Broadcast(RecordLatest()),
             check_addresses=Broadcast(),
         )
+
+        # For interactive use
+        global _last_env
+        _last_env = env
 
         with env.use():
             should_work_on_db = await _should_work_on_db(
@@ -136,16 +153,11 @@ async def _database_flow(global_env: _GlobalEnv):
                     await _register_binary()
                     tg.start_soon(_upload_original_files)
 
-                tg.start_soon(
-                    upload_revisions_task,
-                    UploadRevisionsOptions(
-                        objects_per_revision=_OBJECTS_PER_REVISION,
-                        buffer_changes_period=_BUFFER_CHANGES_PERIOD,
-                    ),
-                )
+                tg.start_soon(upload_revisions_task, _UPLOAD_OPTIONS)
                 tg.start_soon(clear_inferences_marks_task)
                 tg.start_soon(monitor_analysis)
-                tg.start_soon(poll_server_task)
+                tg.start_soon(poll_server_status_task)
+                tg.start_soon(poll_inferences_task)
 
                 await anyio.sleep(0.1)  # Let previous tasks start
                 tg.start_soon(track_changes_task)
@@ -186,19 +198,6 @@ async def _should_work_on_db(
         return False
 
     return True
-
-
-@asynccontextmanager
-async def hook_hexrays(event_collector: ida_events.EventCollector):
-    """
-    Hook HexRays. Note that doing this in plugin entry causes crashes.
-    """
-    hexrays_hooks = ida_events.HexRaysHooks(event_collector)
-    await ida_tasks.run_ui(hexrays_hooks.hook)
-    try:
-        yield
-    finally:
-        await ida_tasks.run_ui(hexrays_hooks.unhook)
 
 
 async def _register_binary():
@@ -246,3 +245,15 @@ async def _upload_original_files():
                 else:
                     # Not critical for plugin.
                     break
+
+
+def _setup_interactive_env():
+    """
+    Only for use in console, to allow interacting with our code.
+    """
+
+    from decompai_ida.ida_tasks import _running_in_task
+    from decompai_ida.env import _current_env
+
+    _running_in_task.set(True)
+    _current_env.set(_last_env)

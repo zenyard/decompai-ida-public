@@ -7,7 +7,9 @@ Utilities:
 - `run` - call a sync function from async.
 - `run_ui` - modify UI from async.
 - `wrap_iterator` - turn iterator to async iterator (useful with idautils).
-- `for_each` - apply function on each element from async.
+- `for_each` - apply sync function on each element from async.
+- `AsyncCallback` - make async function callable from sync.
+- `hook` - apply IDA hooks from async.
 
 Decorators are currently not suitable for methods. Decorated functions offer
 their original counterpart under `sync` method.
@@ -17,7 +19,7 @@ import asyncio
 import contextvars
 import time
 import typing as ty
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from itertools import islice
@@ -50,6 +52,16 @@ def is_running_in_task() -> bool:
     return _running_in_task.get()
 
 
+def assert_running_in_task():
+    """
+    Raises if called outside task (outside IDA's thread).
+
+    Should be added to all functions not explicitly wrapped with a decorator
+    from this module. Decorators add this check to their `sync` variant.
+    """
+    assert is_running_in_task(), "Sync code running outside task"
+
+
 @contextmanager
 def _set_running_in_task(value: bool):
     token = _running_in_task.set(value)
@@ -59,13 +71,39 @@ def _set_running_in_task(value: bool):
         _running_in_task.reset(token)
 
 
-def wrap(func: ty.Callable[_P, _R]) -> WrappedFunc[_P, _R]:
-    @wraps(func)
-    async def wrapped(*args: _P.args, **kwargs: _P.kwargs):
-        return await _run_in_main(lambda: func(*args, **kwargs))
+@ty.overload
+def wrap(
+    *, ui_only: bool
+) -> ty.Callable[[ty.Callable[_P, _R]], WrappedFunc[_P, _R]]: ...
 
-    setattr(wrapped, "sync", func)
-    return ty.cast(ty.Any, wrapped)
+
+@ty.overload
+def wrap(func: ty.Callable[_P, _R], /) -> WrappedFunc[_P, _R]: ...
+
+
+def wrap(
+    func: ty.Optional[ty.Callable[_P, _R]] = None, *, ui_only=False
+) -> ty.Any:
+    def wrapper(func: ty.Callable[_P, _R]) -> WrappedFunc[_P, _R]:
+        @wraps(func)
+        def wrapped_with_assert(*args: _P.args, **kwargs: _P.kwargs):
+            assert_running_in_task()
+            return func(*args, **kwargs)
+
+        @wraps(func)
+        async def wrapped(*args: _P.args, **kwargs: _P.kwargs):
+            return await _run_in_main(
+                lambda: func(*args, **kwargs),
+                ida_kernwin.MFF_FAST if ui_only else ida_kernwin.MFF_WRITE,
+            )
+
+        setattr(wrapped, "sync", wrapped_with_assert)
+        return ty.cast(ty.Any, wrapped)
+
+    if func is not None:
+        return wrapper(func)
+    else:
+        return wrapper
 
 
 async def run(
@@ -88,7 +126,11 @@ async def run_ui(
 
 
 async def wrap_iter(
-    iter: ty.Iterator[_R], *, max_items=4096, max_time=0.1
+    iter: ty.Iterator[_R],
+    *,
+    max_items=1024,
+    max_time=0.010,
+    sleep_between=0.005,
 ) -> ty.AsyncIterator[_R]:
     def read_chunk():
         chunk = list[_R]()
@@ -106,16 +148,24 @@ async def wrap_iter(
         chunk, should_continue = await _run_in_main(read_chunk)
         for item in chunk:
             yield item
+        if should_continue and sleep_between > 0:
+            await anyio.sleep(sleep_between)
 
 
 def wrap_generator(
     generator: ty.Callable[_P, ty.Iterator[_R]],
 ) -> WrappedGenerator[_P, _R]:
     @wraps(generator)
+    def wrapped_with_assert(*args: _P.args, **kwargs: _P.kwargs):
+        for item in generator(*args, **kwargs):
+            assert_running_in_task()
+            yield item
+
+    @wraps(generator)
     def wrapped(*args: _P.args, **kwargs: _P.kwargs):
         return wrap_iter(generator(*args, **kwargs))
 
-    setattr(wrapped, "sync", generator)
+    setattr(wrapped, "sync", wrapped_with_assert)
     return ty.cast(ty.Any, wrapped)
 
 
@@ -216,3 +266,21 @@ class AsyncCallback(ty.Generic[_P]):
                 await result
 
         asyncio.run_coroutine_threadsafe(run(), loop=self._loop)
+
+
+class _Hooks(ty.Protocol):
+    def hook(self) -> bool: ...
+    def unhook(self) -> bool: ...
+
+
+@asynccontextmanager
+async def hook(hooks: _Hooks):
+    success = await run_ui(hooks.hook)
+    if not success:
+        raise Exception(f"Hooking {hooks} failed")
+    try:
+        yield
+    finally:
+        success = await run_ui(hooks.unhook)
+        if not success:
+            raise Exception(f"Unhooking {hooks} failed")

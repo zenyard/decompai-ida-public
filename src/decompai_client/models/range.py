@@ -17,32 +17,20 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
-from typing import Any, ClassVar, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, StrictInt
+from typing import Any, ClassVar, Dict, List
+from decompai_client.models.range_detail import RangeDetail
 from typing import Optional, Set
 from typing_extensions import Self
 
-class Thunk(BaseModel):
+class Range(BaseModel):
     """
-    Thunk
+    Range
     """ # noqa: E501
-    address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
-    name: StrictStr
-    has_known_name: Optional[StrictBool] = False
-    inference_seq_number: Optional[StrictInt] = 0
-    type: Optional[StrictStr] = 'thunk'
-    target: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
-    __properties: ClassVar[List[str]] = ["address", "name", "has_known_name", "inference_seq_number", "type", "target"]
-
-    @field_validator('type')
-    def type_validate_enum(cls, value):
-        """Validates the enum"""
-        if value is None:
-            return value
-
-        if value not in set(['thunk']):
-            raise ValueError("must be one of enum values ('thunk')")
-        return value
+    start: StrictInt
+    length: StrictInt
+    detail: RangeDetail
+    __properties: ClassVar[List[str]] = ["start", "length", "detail"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -62,7 +50,7 @@ class Thunk(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of Thunk from a JSON string"""
+        """Create an instance of Range from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -83,11 +71,14 @@ class Thunk(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of detail
+        if self.detail:
+            _dict['detail'] = self.detail.to_dict()
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of Thunk from a dict"""
+        """Create an instance of Range from a dict"""
         if obj is None:
             return None
 
@@ -95,12 +86,9 @@ class Thunk(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "address": obj.get("address"),
-            "name": obj.get("name"),
-            "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
-            "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
-            "type": obj.get("type") if obj.get("type") is not None else 'thunk',
-            "target": obj.get("target")
+            "start": obj.get("start"),
+            "length": obj.get("length"),
+            "detail": RangeDetail.from_dict(obj["detail"]) if obj.get("detail") is not None else None
         })
         return _obj
 

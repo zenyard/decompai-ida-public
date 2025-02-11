@@ -1,11 +1,12 @@
 import typing as ty
 
+from netnode.netnode import NetnodeCorruptError
 import typing_extensions as tye
 from netnode import Netnode
 from pydantic import BaseModel, TypeAdapter
 
 from decompai_client import Inference
-from decompai_ida import ida_tasks
+from decompai_ida import ida_tasks, logger
 from decompai_ida.env import Env
 from decompai_ida.serialization import EncodedBytes
 
@@ -89,6 +90,20 @@ def get_user_confirmation() -> ty.Optional[bool]:
 def set_user_confirmation(value: bool):
     nodes = Env.get().state_nodes
     return nodes.general.write_sync("user_confirmed", value)
+
+
+@ida_tasks.wrap
+def was_initial_analysis_complete() -> bool:
+    nodes = Env.get().state_nodes
+    return nodes.general.read_sync(
+        "initial_analysis_complete", bool, default=False
+    )
+
+
+@ida_tasks.wrap
+def mark_initial_analysis_complete():
+    nodes = Env.get().state_nodes
+    return nodes.general.write_sync("initial_analysis_complete", True)
 
 
 @ida_tasks.wrap
@@ -190,21 +205,35 @@ _Key: tye.TypeAlias = ty.Union[str, int]
 class _Node:
     """
     Wraps Netnode, validates types with Pydantic.
+
+    Tries to recover from corruption by removing keys.
     """
 
     def __init__(self, name: str):
         self._inner = Netnode(f"$ {name}")
+        self._name = name
+        self._logger = logger.get().bind(node=name)
 
     def read_sync(
         self, key: _Key, type_: type[_T], *, default: _U = None
     ) -> ty.Union[_T, _U]:
-        value = self._inner.get(key)
+        ida_tasks.assert_running_in_task()
+
+        try:
+            value = self._inner.get(key)
+        except NetnodeCorruptError:
+            self._logger.warning("Deleting corrupted key", key=key)
+            del self._inner[key]
+            value = None
+
         if value is not None:
             return TypeAdapter(type_).validate_python(value)
         else:
             return default
 
     def write_sync(self, key: _Key, value: ty.Any):
+        ida_tasks.assert_running_in_task()
+
         self._inner[key] = TypeAdapter(type(value)).dump_python(
             value, mode="json"
         )
@@ -217,11 +246,9 @@ class _Node:
         *,
         initial: _U = None,
     ) -> _T:
-        existing = self._inner.get(key)
-        if existing is not None:
-            existing = TypeAdapter(type_).validate_python(existing)
-        else:
-            existing = initial
+        ida_tasks.assert_running_in_task()
+
+        existing = self.read_sync(key, type_, default=initial)
         modified = modifier(existing)
         self.write_sync(key, modified)
         return modified

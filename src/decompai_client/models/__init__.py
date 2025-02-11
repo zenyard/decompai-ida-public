@@ -14,6 +14,7 @@
 
 
 # import models into model package
+from decompai_client.models.address_detail import AddressDetail
 from decompai_client.models.binary_analysis_idle import BinaryAnalysisIdle
 from decompai_client.models.binary_analysis_in_progress import BinaryAnalysisInProgress
 from decompai_client.models.function import Function
@@ -22,11 +23,17 @@ from decompai_client.models.get_binary_status_response import GetBinaryStatusRes
 from decompai_client.models.get_inferences_response import GetInferencesResponse
 from decompai_client.models.http_validation_error import HTTPValidationError
 from decompai_client.models.inference import Inference
+from decompai_client.models.l_var_detail import LVarDetail
+from decompai_client.models.maybe_unknown_inference import MaybeUnknownInference
 from decompai_client.models.name import Name
 from decompai_client.models.object import Object
+from decompai_client.models.parameters_mapping import ParametersMapping
 from decompai_client.models.post_binary_body import PostBinaryBody
 from decompai_client.models.post_binary_response import PostBinaryResponse
 from decompai_client.models.put_revision_body import PutRevisionBody
+from decompai_client.models.range import Range
+from decompai_client.models.range_detail import RangeDetail
 from decompai_client.models.thunk import Thunk
 from decompai_client.models.validation_error import ValidationError
 from decompai_client.models.validation_error_loc_inner import ValidationErrorLocInner
+from decompai_client.models.variables_mapping import VariablesMapping

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import anyio
 import typing_extensions as tye
 
-from decompai_ida import ida_events
+from decompai_ida import ida_events, logger
 from decompai_ida.async_utils import wait_for_object_of_type
 from decompai_ida.env import Env
 
@@ -32,6 +32,9 @@ TaskKind: tye.TypeAlias = ty.Literal[
     # Tasks that don't require IDA to remain open. E.g. analysis on server,
     # downloading.
     "remote_work",
+    # Applying inferences back to IDA. This is local but user may close IDA
+    # without delaying remote work.
+    "applying_results",
 ]
 "Determines how the task is shown to user"
 
@@ -40,11 +43,12 @@ _TASK_KIND_PRIORITY: ty.Mapping[TaskKind, int] = {
     # Only interesting in case no other task is active, to let user know
     # we're waiting.
     "waiting_for_ida": 0,
-    "remote_work": 1,
+    "applying_results": 1,
+    "remote_work": 2,
     # Most interesting - user must keep IDA open for the duration of this
-    # task.
-    "local_work": 2,
-    "registering": 2,
+    # task to avoid delaying remote work.
+    "local_work": 3,
+    "registering": 3,
 }
 
 # Text to show in UI for each kind of task.
@@ -53,6 +57,7 @@ _TASK_KIND_LABEL: ty.Mapping[TaskKind, str] = {
     "local_work": "Preparing data locally",
     "remote_work": "Reversing on server",
     "registering": "Registering at server",
+    "applying_results": "Downloading results",
 }
 
 # Texts to show when no task is active.
@@ -116,6 +121,9 @@ class Task:
         def with_completed_item(self) -> "Task._Items":
             return Task._Items(total=self.total, completed=self.completed + 1)
 
+        def with_additional_items(self, n: int) -> "Task._Items":
+            return Task._Items(total=self.total + n, completed=self.completed)
+
     @dataclass(frozen=True)
     class _Percentage:
         value: float
@@ -135,8 +143,19 @@ class Task:
         self._warning_start_time: ty.Optional[float] = None
         self._last_update: ty.Optional[TaskUpdate] = None
 
+    async def set_started(self):
+        self._state = Task._Started()
+        await self._send_update()
+
     async def set_item_count(self, n: int):
         self._state = Task._Items(total=n, completed=0)
+        await self._send_update()
+
+    async def add_item_count(self, n: int):
+        if isinstance(self._state, Task._Items):
+            self._state = self._state.with_additional_items(n)
+        else:
+            self._state = Task._Items(total=n, completed=0)
         await self._send_update()
 
     async def mark_item_complete(self):
@@ -219,6 +238,7 @@ async def begin_task(
             await task.mark_done()
 
 
+@logger.instrument(task="summarize_task_updates")
 async def summarize_task_updates():
     """
     Aggregate task updates and send `StatusSummary` objects.
@@ -238,6 +258,7 @@ async def summarize_task_updates():
             status_summary = StatusSummary.from_task_updates(tasks.values())
 
             if status_summary != last_status_summary:
+                await _log_status_summary(status_summary)
                 await env.status_summaries.post(status_summary)
                 last_status_summary = status_summary
 
@@ -347,6 +368,18 @@ class StatusSummary:
             progress=highest_priority.progress,
             warning=any_warning,
         )
+
+
+async def _log_status_summary(summary: ty.Optional[StatusSummary]):
+    if summary is not None:
+        await logger.get().ainfo(
+            "Status updated",
+            task_kind=summary.task_kind,
+            progress=summary.progress,
+            warning=summary.warning,
+        )
+    else:
+        await logger.get().ainfo("Status idle")
 
 
 def _get_summary_kind(

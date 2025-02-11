@@ -41,13 +41,16 @@ async def status_bar_widget() -> ty.AsyncIterator["StatusBarWidgetProxy"]:
 
     global _current_widget
 
-    def setup_sync():
+    @ida_tasks.wrap(ui_only=True)
+    def setup():
+        ida_tasks.assert_running_in_task()
+
         status_bar = _find_status_bar_sync()
         widget = _StatusBarWidget()
         status_bar.addPermanentWidget(widget)
         return status_bar, widget
 
-    status_bar, widget = await ida_tasks.run_ui(setup_sync)
+    status_bar, widget = await setup()
 
     try:
         _current_widget = widget
@@ -143,6 +146,8 @@ def _load_icon(file_name: str) -> QPixmap:
 
 
 def _find_status_bar_sync() -> QStatusBar:
+    ida_tasks.assert_running_in_task()
+
     for widget in QApplication.topLevelWidgets():
         if isinstance(widget, QMainWindow):
             return widget.statusBar()

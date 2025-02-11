@@ -19,7 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 from typing import Any, ClassVar, Dict, List
-from decompai_client.models.inference import Inference
+from decompai_client.models.maybe_unknown_inference import MaybeUnknownInference
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,7 +27,7 @@ class GetInferencesResponse(BaseModel):
     """
     GetInferencesResponse
     """ # noqa: E501
-    inferences: List[Inference]
+    inferences: List[MaybeUnknownInference]
     cursor: StrictInt
     has_next: StrictBool
     __properties: ClassVar[List[str]] = ["inferences", "cursor", "has_next"]
@@ -90,7 +90,7 @@ class GetInferencesResponse(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "inferences": [Inference.from_dict(_item) for _item in obj["inferences"]] if obj.get("inferences") is not None else None,
+            "inferences": [MaybeUnknownInference.from_dict(_item) for _item in obj["inferences"]] if obj.get("inferences") is not None else None,
             "cursor": obj.get("cursor"),
             "has_next": obj.get("has_next")
         })

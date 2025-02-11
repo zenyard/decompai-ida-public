@@ -19,11 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, f
 from typing import Any, List, Optional
 from decompai_client.models.function_overview import FunctionOverview
 from decompai_client.models.name import Name
+from decompai_client.models.parameters_mapping import ParametersMapping
+from decompai_client.models.variables_mapping import VariablesMapping
 from pydantic import StrictStr, Field
 from typing import Union, List, Set, Optional, Dict
 from typing_extensions import Literal, Self
 
-INFERENCE_ONE_OF_SCHEMAS = ["FunctionOverview", "Name"]
+INFERENCE_ONE_OF_SCHEMAS = ["FunctionOverview", "Name", "ParametersMapping", "VariablesMapping"]
 
 class Inference(BaseModel):
     """
@@ -33,8 +35,12 @@ class Inference(BaseModel):
     oneof_schema_1_validator: Optional[Name] = None
     # data type: FunctionOverview
     oneof_schema_2_validator: Optional[FunctionOverview] = None
-    actual_instance: Optional[Union[FunctionOverview, Name]] = None
-    one_of_schemas: Set[str] = { "FunctionOverview", "Name" }
+    # data type: ParametersMapping
+    oneof_schema_3_validator: Optional[ParametersMapping] = None
+    # data type: VariablesMapping
+    oneof_schema_4_validator: Optional[VariablesMapping] = None
+    actual_instance: Optional[Union[FunctionOverview, Name, ParametersMapping, VariablesMapping]] = None
+    one_of_schemas: Set[str] = { "FunctionOverview", "Name", "ParametersMapping", "VariablesMapping" }
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -70,12 +76,22 @@ class Inference(BaseModel):
             error_messages.append(f"Error! Input type `{type(v)}` is not `FunctionOverview`")
         else:
             match += 1
+        # validate data type: ParametersMapping
+        if not isinstance(v, ParametersMapping):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `ParametersMapping`")
+        else:
+            match += 1
+        # validate data type: VariablesMapping
+        if not isinstance(v, VariablesMapping):
+            error_messages.append(f"Error! Input type `{type(v)}` is not `VariablesMapping`")
+        else:
+            match += 1
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, VariablesMapping. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when setting `actual_instance` in Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, VariablesMapping. Details: " + ", ".join(error_messages))
         else:
             return v
 
@@ -102,13 +118,25 @@ class Inference(BaseModel):
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
+        # deserialize data into ParametersMapping
+        try:
+            instance.actual_instance = ParametersMapping.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into VariablesMapping
+        try:
+            instance.actual_instance = VariablesMapping.from_json(json_str)
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
 
         if match > 1:
             # more than 1 match
-            raise ValueError("Multiple matches found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name. Details: " + ", ".join(error_messages))
+            raise ValueError("Multiple matches found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, VariablesMapping. Details: " + ", ".join(error_messages))
         elif match == 0:
             # no match
-            raise ValueError("No match found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name. Details: " + ", ".join(error_messages))
+            raise ValueError("No match found when deserializing the JSON string into Inference with oneOf schemas: FunctionOverview, Name, ParametersMapping, VariablesMapping. Details: " + ", ".join(error_messages))
         else:
             return instance
 
@@ -122,7 +150,7 @@ class Inference(BaseModel):
         else:
             return json.dumps(self.actual_instance)
 
-    def to_dict(self) -> Optional[Union[Dict[str, Any], FunctionOverview, Name]]:
+    def to_dict(self) -> Optional[Union[Dict[str, Any], FunctionOverview, Name, ParametersMapping, VariablesMapping]]:
         """Returns the dict representation of the actual instance"""
         if self.actual_instance is None:
             return None

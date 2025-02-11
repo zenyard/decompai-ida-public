@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
+from decompai_client.models.range import Range
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,12 +28,14 @@ class Function(BaseModel):
     Function
     """ # noqa: E501
     address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
+    name: StrictStr
+    has_known_name: Optional[StrictBool] = False
+    inference_seq_number: Optional[StrictInt] = 0
     type: Optional[StrictStr] = 'function'
     code: StrictStr
+    ranges: Optional[List[Range]]
     calls: List[StrictStr]
-    name: StrictStr
-    has_known_name: StrictBool
-    __properties: ClassVar[List[str]] = ["address", "type", "code", "calls", "name", "has_known_name"]
+    __properties: ClassVar[List[str]] = ["address", "name", "has_known_name", "inference_seq_number", "type", "code", "ranges", "calls"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -83,6 +86,18 @@ class Function(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each item in ranges (list)
+        _items = []
+        if self.ranges:
+            for _item_ranges in self.ranges:
+                if _item_ranges:
+                    _items.append(_item_ranges.to_dict())
+            _dict['ranges'] = _items
+        # set to None if ranges (nullable) is None
+        # and model_fields_set contains the field
+        if self.ranges is None and "ranges" in self.model_fields_set:
+            _dict['ranges'] = None
+
         return _dict
 
     @classmethod
@@ -96,11 +111,13 @@ class Function(BaseModel):
 
         _obj = cls.model_validate({
             "address": obj.get("address"),
+            "name": obj.get("name"),
+            "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
+            "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
             "type": obj.get("type") if obj.get("type") is not None else 'function',
             "code": obj.get("code"),
-            "calls": obj.get("calls"),
-            "name": obj.get("name"),
-            "has_known_name": obj.get("has_known_name")
+            "ranges": [Range.from_dict(_item) for _item in obj["ranges"]] if obj.get("ranges") is not None else None,
+            "calls": obj.get("calls")
         })
         return _obj
 

@@ -30,8 +30,7 @@ class FunctionOverview(BaseModel):
     address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
     overview: StrictStr
     full_description: StrictStr
-    confidence: StrictInt
-    __properties: ClassVar[List[str]] = ["type", "address", "overview", "full_description", "confidence"]
+    __properties: ClassVar[List[str]] = ["type", "address", "overview", "full_description"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -98,7 +97,6 @@ class FunctionOverview(BaseModel):
             "address": obj.get("address"),
             "overview": obj.get("overview"),
             "full_description": obj.get("full_description"),
-            "confidence": obj.get("confidence")
         })
         return _obj
 

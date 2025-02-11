@@ -17,22 +17,19 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 
-class Thunk(BaseModel):
+class ParametersMapping(BaseModel):
     """
-    Thunk
+    ParametersMapping
     """ # noqa: E501
+    type: Optional[StrictStr] = 'params'
     address: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
-    name: StrictStr
-    has_known_name: Optional[StrictBool] = False
-    inference_seq_number: Optional[StrictInt] = 0
-    type: Optional[StrictStr] = 'thunk'
-    target: StrictStr = Field(description="Represents a 64-bit address as a 16-character lowercase hexadecimal string.")
-    __properties: ClassVar[List[str]] = ["address", "name", "has_known_name", "inference_seq_number", "type", "target"]
+    parameters_mapping: Dict[str, StrictStr]
+    __properties: ClassVar[List[str]] = ["type", "address", "parameters_mapping"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -40,8 +37,8 @@ class Thunk(BaseModel):
         if value is None:
             return value
 
-        if value not in set(['thunk']):
-            raise ValueError("must be one of enum values ('thunk')")
+        if value not in set(['params']):
+            raise ValueError("must be one of enum values ('params')")
         return value
 
     model_config = ConfigDict(
@@ -62,7 +59,7 @@ class Thunk(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of Thunk from a JSON string"""
+        """Create an instance of ParametersMapping from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -87,7 +84,7 @@ class Thunk(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of Thunk from a dict"""
+        """Create an instance of ParametersMapping from a dict"""
         if obj is None:
             return None
 
@@ -95,12 +92,9 @@ class Thunk(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "type": obj.get("type") if obj.get("type") is not None else 'params',
             "address": obj.get("address"),
-            "name": obj.get("name"),
-            "has_known_name": obj.get("has_known_name") if obj.get("has_known_name") is not None else False,
-            "inference_seq_number": obj.get("inference_seq_number") if obj.get("inference_seq_number") is not None else 0,
-            "type": obj.get("type") if obj.get("type") is not None else 'thunk',
-            "target": obj.get("target")
+            "parameters_mapping": obj.get("parameters_mapping")
         })
         return _obj
 

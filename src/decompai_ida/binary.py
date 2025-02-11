@@ -1,5 +1,6 @@
 import gzip
 import io
+from pathlib import Path
 import shutil
 import typing as ty
 from dataclasses import dataclass
@@ -36,13 +37,13 @@ def get_size() -> int:
 
 
 @ida_tasks.wrap
-def get_binary_path() -> anyio.Path:
-    return anyio.Path(ida_nalt.get_input_file_path())
+def get_binary_path() -> Path:
+    return Path(ida_nalt.get_input_file_path())
 
 
 @ida_tasks.wrap
-def get_idb_path() -> anyio.Path:
-    return anyio.Path(ida_loader.get_path(ida_loader.PATH_TYPE_IDB))
+def get_idb_path() -> Path:
+    return Path(ida_loader.get_path(ida_loader.PATH_TYPE_IDB))
 
 
 @dataclass(frozen=True)
@@ -53,12 +54,12 @@ class InputFile:
 
 async def read_compressed_input_file() -> InputFile:
     # Prefer original binary
-    input_path = await get_binary_path()
+    input_path = anyio.Path(await get_binary_path())
     name = "binary.gz"
 
     if not await input_path.exists():
         # Fallback to IDB
-        input_path = await get_idb_path()
+        input_path = anyio.Path(await get_idb_path())
         name = "idb.gz"
 
     if not await input_path.exists():

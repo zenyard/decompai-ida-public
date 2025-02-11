@@ -34,6 +34,18 @@ class PluginConfiguration(BaseModel, frozen=True):
 
     require_confirmation_per_db: bool = False
 
+    log_level: ty.Optional[
+        ty.Literal[
+            "CRITICAL",
+            "FATAL",
+            "ERROR",
+            "WARN",
+            "WARNING",
+            "INFO",
+            "DEBUG",
+        ]
+    ] = None
+
     def with_user_config(
         self, *, require_confirmation_per_db: bool
     ) -> "PluginConfiguration":
@@ -41,6 +53,7 @@ class PluginConfiguration(BaseModel, frozen=True):
             api_url=self.api_url,
             api_key=self.api_key,
             require_confirmation_per_db=require_confirmation_per_db,
+            log_level=self.log_level,
         )
 
 

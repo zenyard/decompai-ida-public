@@ -8,7 +8,7 @@ if ty.TYPE_CHECKING:
     from decompai_client import BinariesApi
     from decompai_ida import ida_events
     from decompai_ida.broadcast import Broadcast
-    from decompai_ida.poll_server import ServerStateChanged
+    from decompai_ida.poll_server_status import ServerStateChanged
     from decompai_ida.state import StateNodes
     from decompai_ida.status import StatusSummary, TaskUpdate
     from decompai_ida.upload_revisions import (

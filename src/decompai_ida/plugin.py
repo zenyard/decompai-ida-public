@@ -1,4 +1,3 @@
-import signal
 import typing as ty
 from threading import Thread
 
@@ -20,7 +19,14 @@ class DecompaiPlugin(ida_idaapi.plugin_t):
     def init(self):
         # IDA disables Python default handling of SIGPIPE, making the process
         # crash on socket errors.
-        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+        try:
+            import signal
+
+            signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+        except Exception:
+            # Signals not supported (e.g. Windows).
+            pass
+
         return DecompaiPlugmod()
 
 

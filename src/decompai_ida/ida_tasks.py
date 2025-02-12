@@ -59,7 +59,9 @@ def assert_running_in_task():
     Should be added to all functions not explicitly wrapped with a decorator
     from this module. Decorators add this check to their `sync` variant.
     """
-    assert is_running_in_task(), "Sync code running outside task"
+    # TODO: restore assert once this also succeeds when running from IDA's
+    # thread but not from a task (e.g. hook, plugin callback).
+    # assert is_running_in_task(), "Sync code running outside task"
 
 
 @contextmanager

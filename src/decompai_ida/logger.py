@@ -67,7 +67,69 @@ def _create_logger(
     )
 
 
+class _NoopLogger:
+    def bind(self, **kwargs):
+        return self
+
+    def unbind(self, *args, **kwargs):
+        return self
+
+    def new(self, *args, **kwargs):
+        return self
+
+    def msg(self, *args, **kwargs):
+        pass
+
+    def debug(self, *args, **kwargs):
+        pass
+
+    def info(self, *args, **kwargs):
+        pass
+
+    def warning(self, *args, **kwargs):
+        pass
+
+    def warn(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
+
+    def exception(self, *args, **kwargs):
+        pass
+
+    def critical(self, *args, **kwargs):
+        pass
+
+    def log(self, *args, **kwargs):
+        pass
+
+    async def adebug(self, *args, **kwargs):
+        pass
+
+    async def ainfo(self, *args, **kwargs):
+        pass
+
+    async def awarning(self, *args, **kwargs):
+        pass
+
+    async def awarn(self, *args, **kwargs):
+        pass
+
+    async def aerror(self, *args, **kwargs):
+        pass
+
+    async def aexception(self, *args, **kwargs):
+        pass
+
+    async def acritical(self, *args, **kwargs):
+        pass
+
+    async def alog(self, *args, **kwargs):
+        pass
+
+
 _CURRENT_LOGGER = contextvars.ContextVar(
     "decompai_logger",
-    default=_create_logger(None, "CRITICAL"),
+    default=structlog.wrap_logger(_NoopLogger()),
 )

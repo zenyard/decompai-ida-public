@@ -82,9 +82,9 @@ def _apply_inferences_for_address_sync(
 
                 state.add_inference_for_address.sync(address, inference)
 
-            except Exception:
+            except Exception as ex:
                 logger.get().warning(
-                    "Error while applying inferences", exc_info=True
+                    "Error while applying inferences", exc_info=ex
                 )
 
     _update_pseudocode_viewer_for_address_sync(address)
@@ -365,9 +365,9 @@ def _maintain_uploaded_hash_sync(address: int):
                     )
                     logger.get().debug("Maintained hash")
 
-                except Exception:
+                except Exception as ex:
                     logger.get().warning(
-                        "Error while maintaining hash", exc_info=True
+                        "Error while maintaining hash", exc_info=ex
                     )
                     pass
             else:
@@ -392,8 +392,8 @@ def _is_object_known_to_be_clean_sync(address: int) -> bool:
         )
         return current_hash == status.uploaded_hash
 
-    except Exception:
+    except Exception as ex:
         logger.get().warning(
-            "Error while checking if object is clean", exc_info=True
+            "Error while checking if object is clean", exc_info=ex
         )
         return False

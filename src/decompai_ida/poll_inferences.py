@@ -118,7 +118,7 @@ async def _fetch_and_apply_inferences(*, task: status.Task):
             if api.is_temporary_error(ex):
                 await logger.get().awarning(
                     "Error while fetching inferences",
-                    exc_info=True,
+                    exc_info=ex,
                     is_temporary=True,
                 )
                 await task.set_warning()

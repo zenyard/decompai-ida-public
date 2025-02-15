@@ -56,7 +56,7 @@ async def retry_forever(
                 "Error from API",
                 is_temporary=is_temporary,
                 description=description,
-                exc_info=True,
+                exc_info=ex,
             )
 
             if is_temporary:

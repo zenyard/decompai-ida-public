@@ -133,9 +133,9 @@ async def _prepare_revisions_task(
                     await upload_queue.add_object(pending_object)
                     await log.adebug("Object queued")
 
-                except Exception:
+                except Exception as ex:
                     # Skip this object
-                    await log.awarning("Error while handling", exc_info=True)
+                    await log.awarning("Error while handling", exc_info=ex)
                     skipped_objects.append(pending_object)
                     pass
 

@@ -4,6 +4,7 @@ from inspect import cleandoc
 import anyio
 import exceptiongroup
 import ida_kernwin
+import typing as ty
 
 from decompai_client import BinariesApi, PostBinaryBody
 from decompai_client.exceptions import ForbiddenException, UnauthorizedException
@@ -40,11 +41,22 @@ _UPLOAD_OPTIONS = UploadRevisionsOptions(
     buffer_changes_period=1,
 )
 
+_stop: ty.Callable = lambda: None  # noqa: E731
+
+
+def stop():
+    "Stop the plugin for this IDA session"
+    _stop()
+
 
 async def main(event_collector: ida_events.EventCollector):
+    global _stop
+
     try:
         # Use task group to ensure all exceptions are grouped.
-        async with anyio.create_task_group():
+        async with anyio.create_task_group() as tg:
+            _stop = ida_tasks.AsyncCallback(tg.cancel_scope.cancel)
+
             # Start pumping events to broadcast.
             events = Broadcast[ida_events.Event](ida_events.EventRecorder())
             await event_collector.set_async_handler(events.post)
@@ -77,6 +89,9 @@ async def main(event_collector: ida_events.EventCollector):
             )
         else:
             exceptiongroup.print_exception(ex)
+
+    finally:
+        _stop = lambda: None  # noqa: E731
 
 
 @dataclass(frozen=True)
@@ -225,10 +240,8 @@ async def _upload_original_files():
 
     try:
         input_file = await binary.read_compressed_input_file()
-    except Exception:
-        await logger.get().awarning(
-            "Error while reading original", exc_info=True
-        )
+    except Exception as ex:
+        await logger.get().awarning("Error while reading original", exc_info=ex)
         # Not critical for plugin.
         return
 
@@ -247,7 +260,7 @@ async def _upload_original_files():
 
                 await logger.get().awarning(
                     "Error while uploading original",
-                    exc_info=True,
+                    exc_info=ex,
                     name=input_file.name,
                     size=len(input_file.data),
                     is_temporary=is_temporary,

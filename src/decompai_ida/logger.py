@@ -1,7 +1,10 @@
 from contextlib import asynccontextmanager
 from functools import wraps
+from io import StringIO
 from pathlib import Path
 import typing as ty
+import exceptiongroup
+from structlog.typing import ExcInfo
 import typing_extensions as tye
 import structlog
 import contextvars
@@ -47,6 +50,22 @@ def get() -> structlog.stdlib.BoundLogger:
     return _CURRENT_LOGGER.get()
 
 
+# Uses exceptiongroup instead of traceback for compatibility with Python 3.9
+def _format_exception(exc_info: ExcInfo) -> str:
+    sio = StringIO()
+
+    exceptiongroup.print_exception(
+        exc_info[0], exc_info[1], exc_info[2], None, sio
+    )
+
+    s = sio.getvalue()
+    sio.close()
+    if s[-1:] == "\n":
+        s = s[:-1]
+
+    return s
+
+
 def _create_logger(
     output: ty.Optional[ty.TextIO], level: ty.Union[str, int]
 ) -> structlog.stdlib.BoundLogger:
@@ -59,6 +78,7 @@ def _create_logger(
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
+            structlog.processors.ExceptionRenderer(_format_exception),
             structlog.processors.StackInfoRenderer(),
             structlog.dev.set_exc_info,
             structlog.processors.TimeStamper(

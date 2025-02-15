@@ -44,7 +44,7 @@ async def _poll_server():
 
                 await logger.get().awarning(
                     "Error while polling server status",
-                    exc_info=True,
+                    exc_info=ex,
                     is_temporary=is_temporary,
                 )
 

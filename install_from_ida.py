@@ -14,7 +14,6 @@ from uuid import UUID, uuid4
 
 import ida_diskio
 import ida_kernwin
-import ida_loader
 
 API_URL = "https://api.zenyard.ai"
 INSTALL_LOCATION = "git+https://github.com/zenyard/decompai-ida-public.git"
@@ -50,7 +49,12 @@ def main():
             install_configuration(api_key=api_key)
 
         print("[+] All set!")
-        run_in_ui(lambda: ida_loader.load_plugin(str(stub_path)))
+        stop_running_plugin()
+        run_in_ui(
+            lambda: ida_kernwin.info(
+                "DecompAI was installed successfully, restart IDA to use it."
+            )
+        )
 
     except Exception as ex:
         message = f"Install failed: {ex}"
@@ -197,6 +201,17 @@ def install_configuration(*, api_key: str):
 
     with config_path.open("w") as config_output:
         json.dump({"api_url": API_URL, "api_key": api_key}, config_output)
+
+
+def stop_running_plugin():
+    try:
+        from decompai_ida import main
+
+        main.stop()
+
+    except Exception:
+        # Ignore - maybe it's not running.
+        pass
 
 
 T = ty.TypeVar("T")

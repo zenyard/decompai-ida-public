@@ -366,6 +366,9 @@ def _maintain_uploaded_hash_sync(address: int):
                     logger.get().debug("Maintained hash")
 
                 except Exception:
+                    logger.get().warning(
+                        "Error while maintaining hash", exc_info=True
+                    )
                     pass
             else:
                 logger.get().debug("Not maintaining hash of dirty object")
@@ -390,4 +393,7 @@ def _is_object_known_to_be_clean_sync(address: int) -> bool:
         return current_hash == status.uploaded_hash
 
     except Exception:
+        logger.get().warning(
+            "Error while checking if object is clean", exc_info=True
+        )
         return False

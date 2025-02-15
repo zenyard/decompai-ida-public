@@ -116,6 +116,11 @@ async def _fetch_and_apply_inferences(*, task: status.Task):
 
         except Exception as ex:
             if api.is_temporary_error(ex):
+                await logger.get().awarning(
+                    "Error while fetching inferences",
+                    exc_info=True,
+                    is_temporary=True,
+                )
                 await task.set_warning()
                 await anyio.sleep(_POLL_INTERVAL)
             else:

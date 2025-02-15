@@ -35,14 +35,17 @@ class PluginConfiguration(BaseModel, frozen=True):
     require_confirmation_per_db: bool = False
 
     log_level: ty.Optional[
-        ty.Literal[
-            "CRITICAL",
-            "FATAL",
-            "ERROR",
-            "WARN",
-            "WARNING",
-            "INFO",
-            "DEBUG",
+        ty.Union[
+            ty.Literal[
+                "CRITICAL",
+                "FATAL",
+                "ERROR",
+                "WARN",
+                "WARNING",
+                "INFO",
+                "DEBUG",
+            ],
+            int,
         ]
     ] = None
 

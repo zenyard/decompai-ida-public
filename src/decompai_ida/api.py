@@ -12,7 +12,7 @@ from decompai_client import (
     Configuration as ApiConfiguration,
 )
 from decompai_client.exceptions import ServiceException
-from decompai_ida import status
+from decompai_ida import status, logger
 from decompai_ida.configuration import PluginConfiguration
 
 _RETRY_DELAY = 3
@@ -43,6 +43,7 @@ async def retry_forever(
     func: ty.Callable[[], ty.Awaitable[_T]],
     *,
     task: status.Task,
+    description: str,
 ) -> _T:
     while True:
         try:
@@ -50,7 +51,15 @@ async def retry_forever(
             await task.clear_warning()
             return result
         except Exception as ex:
-            if is_temporary_error(ex):
+            is_temporary = is_temporary_error(ex)
+            await logger.get().awarning(
+                "Error from API",
+                is_temporary=is_temporary,
+                description=description,
+                exc_info=True,
+            )
+
+            if is_temporary:
                 await task.set_warning()
                 await anyio.sleep(_RETRY_DELAY)
             else:

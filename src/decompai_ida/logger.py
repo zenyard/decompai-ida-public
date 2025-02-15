@@ -5,10 +5,11 @@ import typing as ty
 import typing_extensions as tye
 import structlog
 import contextvars
+import logging
 
 
 @asynccontextmanager
-async def open(log_path: Path, level: ty.Optional[str]):
+async def open(log_path: Path, level: ty.Optional[ty.Union[str, int]]):
     if level is None:
         yield
         return
@@ -47,8 +48,12 @@ def get() -> structlog.stdlib.BoundLogger:
 
 
 def _create_logger(
-    output: ty.Optional[ty.TextIO], level: str
+    output: ty.Optional[ty.TextIO], level: ty.Union[str, int]
 ) -> structlog.stdlib.BoundLogger:
+    # Convert level to int for maximum compatibility.
+    if isinstance(level, str):
+        level = logging.getLevelName(level)
+
     return structlog.wrap_logger(
         structlog.WriteLogger(output),
         processors=[

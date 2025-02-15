@@ -211,7 +211,9 @@ async def _register_binary():
 
     async with status.begin_task("registering") as task:
         result = await api.retry_forever(
-            lambda: env.binaries_api.create_binary(post_body), task=task
+            lambda: env.binaries_api.create_binary(post_body),
+            task=task,
+            description="Create binary",
         )
 
     await state.set_binary_id(result.binary_id)
@@ -224,6 +226,9 @@ async def _upload_original_files():
     try:
         input_file = await binary.read_compressed_input_file()
     except Exception:
+        await logger.get().awarning(
+            "Error while reading original", exc_info=True
+        )
         # Not critical for plugin.
         return
 
@@ -238,7 +243,17 @@ async def _upload_original_files():
                 break
 
             except Exception as ex:
-                if api.is_temporary_error(ex):
+                is_temporary = api.is_temporary_error(ex)
+
+                await logger.get().awarning(
+                    "Error while uploading original",
+                    exc_info=True,
+                    name=input_file.name,
+                    size=len(input_file.data),
+                    is_temporary=is_temporary,
+                )
+
+                if is_temporary:
                     await task.set_warning()
                     continue
 

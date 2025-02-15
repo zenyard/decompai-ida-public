@@ -40,7 +40,15 @@ async def _poll_server():
                     break
 
             except Exception as ex:
-                if api.is_temporary_error(ex):
+                is_temporary = api.is_temporary_error(ex)
+
+                await logger.get().awarning(
+                    "Error while polling server status",
+                    exc_info=True,
+                    is_temporary=is_temporary,
+                )
+
+                if is_temporary:
                     await task.set_warning()
                 else:
                     raise

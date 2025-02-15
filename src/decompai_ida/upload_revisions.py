@@ -189,6 +189,7 @@ async def _upload_revisions_task(upload_queue: "_UploadQueue"):
                         put_revision_body=body,
                     ),
                     task=task,
+                    description=f"Put revision {next_revision}",
                 )
 
                 await state.set_current_revision(next_revision)

@@ -280,6 +280,7 @@ async def report_status_summary_at_status_bar(
             status_bar_widget,
         )
     except ImportError:
+        await logger.get().awarning("Can't import PyQT5, no UI", exc_info=True)
         return
 
     env = Env.get()
